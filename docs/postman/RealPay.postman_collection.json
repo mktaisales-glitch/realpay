@@ -1,0 +1,1328 @@
+{
+  "info": {
+    "_postman_id": "15b77da0-349f-57cd-b372-1c716a4a2c09",
+    "name": "RealPay API",
+    "description": "Milestone payments on PayPal, released only when the work is proven.\n\nRun the folders in order against a local server started with `DEMO_MODE=true` and a `DEMO_TEST_CARD` (sandbox). The run creates one renovation project and walks it through funding, proof, release, retention and a simulated dispute, then checks the main error cases.\n\nNewman, from the repository root (so the proof file resolves):\n`npx newman run docs/postman/RealPay.postman_collection.json -e docs/postman/RealPay.local.postman_environment.json`\n\nReference: docs/openapi.yaml.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "item": [
+    {
+      "name": "1. Setup",
+      "description": "Templates, project creation and the project view.",
+      "item": [
+        {
+          "name": "List templates",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Renovation template has 4 milestones and 5% retention', () => {",
+                  "    const t = pm.response.json().templates.find((x) => x.id === 'renovation');",
+                  "    pm.expect(t, 'renovation template').to.be.an('object');",
+                  "    pm.expect(t.milestones).to.have.lengthOf(4);",
+                  "    pm.expect(t.retention.basisPoints).to.eql(500);",
+                  "    pm.expect(t).to.not.have.property('site');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/templates",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "templates"]
+            },
+            "description": "Public. Lists the niches RealPay can run."
+          },
+          "response": []
+        },
+        {
+          "name": "Create project",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Returns the project id and both capability tokens', () => {",
+                  "    pm.expect(body.projectId).to.match(/^prj_/);",
+                  "    pm.expect(body.ownerToken).to.be.a('string').with.length.above(20);",
+                  "    pm.expect(body.contractorToken).to.be.a('string').with.length.above(20);",
+                  "    pm.expect(body.ownerToken).to.not.eql(body.contractorToken);",
+                  "});",
+                  "pm.collectionVariables.set('projectId', body.projectId);",
+                  "pm.collectionVariables.set('ownerToken', body.ownerToken);",
+                  "pm.collectionVariables.set('contractorToken', body.contractorToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects"]
+            },
+            "description": "Public, rate limited (30/hour per IP). Saves projectId, ownerToken and contractorToken. Tokens are shown only once.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"templateId\": \"renovation\",\n  \"title\": \"Bathroom renovation (Postman run)\",\n  \"ownerName\": \"Ana\",\n  \"contractorName\": \"Reformas Pérez\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get project (owner)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const view = pm.response.json();",
+                  "pm.test('Owner view with 4 planned milestones', () => {",
+                  "    pm.expect(view.id).to.eql(pm.collectionVariables.get('projectId'));",
+                  "    pm.expect(view.role).to.eql('owner');",
+                  "    pm.expect(view.milestones).to.have.lengthOf(4);",
+                  "    view.milestones.forEach((m) => pm.expect(m.status).to.eql('PLANNED'));",
+                  "    pm.expect(view.milestones[0].actions).to.include('fund');",
+                  "});",
+                  "pm.test('Ledger chain is intact', () => pm.expect(view.ledger.integrity.valid).to.eql(true));",
+                  "pm.test('Server runs with DEMO_MODE=true (needed by the rest of this collection)', () => pm.expect(view.demoMode).to.eql(true));",
+                  "const bySeq = (n) => view.milestones.find((m) => m.seq === n).id;",
+                  "pm.collectionVariables.set('milestoneId', bySeq(1));",
+                  "pm.collectionVariables.set('milestone2Id', bySeq(2));",
+                  "pm.collectionVariables.set('milestone3Id', bySeq(3));",
+                  "pm.collectionVariables.set('projectToday', view.today);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects", "{{projectId}}"]
+            },
+            "description": "Saves milestoneId (seq 1), milestone2Id (seq 2) and milestone3Id (seq 3), since POST /api/projects returns no milestone ids."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Funding (PayPal)",
+      "description": "Fund milestones with the sandbox test card: one approval, one decline.",
+      "item": [
+        {
+          "name": "Fund milestone 1 with test card (approve)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const m = pm.response.json().milestones.find((x) => x.id === pm.collectionVariables.get('milestoneId'));",
+                  "pm.test('Milestone 1 is FUNDED and the upfront part is paid', () => {",
+                  "    pm.expect(m.status).to.eql('FUNDED');",
+                  "    pm.expect(m.upfront.paid).to.eql(true);",
+                  "    pm.expect(m.authorization).to.be.an('object');",
+                  "    pm.expect(m.authorization.id).to.be.a('string');",
+                  "    pm.expect(m.paypal.orderId).to.be.a('string');",
+                  "    pm.expect(m.actions).to.include('approve');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestoneId}}/demo/fund-with-test-card",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestoneId}}",
+                "demo",
+                "fund-with-test-card"
+              ]
+            },
+            "description": "Demo only. Creates and authorizes the AUTHORIZE order with the sandbox test card, then captures the upfront part and pays the supplier.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"scenario\": \"approve\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Fund milestone 2 with test card (decline)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 402', () => pm.response.to.have.status(402));",
+                  "pm.test('Error code is PAYMENT_DECLINED', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.error).to.eql('PAYMENT_DECLINED');",
+                  "    pm.expect(body.errorDescription).to.be.a('string').and.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('Details carry the PayPal status', () => {",
+                  "    const d = pm.response.json().details;",
+                  "    pm.expect(d).to.have.property('status');",
+                  "    pm.expect(d).to.have.property('processorResponseCode');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestone2Id}}/demo/fund-with-test-card",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestone2Id}}",
+                "demo",
+                "fund-with-test-card"
+              ]
+            },
+            "description": "Demo only. Uses PayPal's CCREJECT-REFUSED card holder name. No money is taken and milestone 2 stays PLANNED.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"scenario\": \"decline\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Proofs and release",
+      "description": "Proof upload, owner decisions and cancellation.",
+      "item": [
+        {
+          "name": "Contractor uploads proof (rejected)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('Proof stored with a decision', () => {",
+                  "    pm.expect(body.proofId).to.match(/^prf_/);",
+                  "    pm.expect(['release', 'review', 'reject']).to.include(body.decision);",
+                  "    pm.expect(body.reason).to.be.a('string').and.not.empty;",
+                  "});",
+                  "pm.test('A photo that is not a renovation is rejected', () => {",
+                  "    pm.expect(body.decision).to.eql('reject');",
+                  "    pm.expect(body.status).to.eql('FUNDED');",
+                  "});",
+                  "pm.collectionVariables.set('lastProofDecision', body.decision);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{contractorToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestoneId}}/proofs",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestoneId}}",
+                "proofs"
+              ]
+            },
+            "description": "Contractor token. Multipart field `file`. The file path is relative to the repository root: run Newman from there, or set Postman's working directory to it.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": "demo/proofs/not-a-renovation.jpg"
+                },
+                {
+                  "key": "note",
+                  "type": "text",
+                  "value": "Bathroom tiling finished."
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Owner rejects proof with reason",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const decision = pm.collectionVariables.get('lastProofDecision');",
+                  "if (decision === 'review') {",
+                  "    pm.test('Status is 200 (proof was in review)', () => pm.response.to.have.status(200));",
+                  "    const m = pm.response.json().milestones.find((x) => x.id === pm.collectionVariables.get('milestoneId'));",
+                  "    pm.test('Milestone goes back to FUNDED', () => pm.expect(m.status).to.eql('FUNDED'));",
+                  "} else {",
+                  "    pm.test('Status is 409 (nothing in review to reject)', () => pm.response.to.have.status(409));",
+                  "    pm.test('Error is INVALID_MILESTONE_STATE, allowed only from IN_REVIEW', () => {",
+                  "        const body = pm.response.json();",
+                  "        pm.expect(body.error).to.eql('INVALID_MILESTONE_STATE');",
+                  "        pm.expect(body.details.allowed).to.eql(['IN_REVIEW']);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestoneId}}/reject",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestoneId}}",
+                "reject"
+              ]
+            },
+            "description": "Owner token. Only a milestone IN_REVIEW can be rejected. If the AI already rejected the proof (milestone back to FUNDED), the API answers 409 INVALID_MILESTONE_STATE; the test accepts both outcomes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"The photo shows a different room; please send the tiled bathroom.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Owner approves milestone 1",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const m = pm.response.json().milestones.find((x) => x.id === pm.collectionVariables.get('milestoneId'));",
+                  "pm.test('Held part captured and paid, retention held', () => {",
+                  "    pm.expect(m.status).to.eql('RELEASED');",
+                  "    pm.expect(m.held.released).to.eql(true);",
+                  "    pm.expect(m.paypal.heldCaptureId).to.be.a('string');",
+                  "    pm.expect(m.retention.status).to.eql('held');",
+                  "    pm.expect(m.retention.releaseAt).to.be.a('string');",
+                  "    pm.expect(m.payouts.map((p) => p.kind)).to.include('contractor');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestoneId}}/approve",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestoneId}}",
+                "approve"
+              ]
+            },
+            "description": "Owner token. Captures the held amount (final capture), keeps 5% retention and pays the rest to the contractor."
+          },
+          "response": []
+        },
+        {
+          "name": "Owner cancels milestone 2",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const m = pm.response.json().milestones.find((x) => x.id === pm.collectionVariables.get('milestone2Id'));",
+                  "pm.test('Milestone 2 is CANCELLED', () => {",
+                  "    pm.expect(m.status).to.eql('CANCELLED');",
+                  "    pm.expect(m.actions).to.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestone2Id}}/cancel",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestone2Id}}",
+                "cancel"
+              ]
+            },
+            "description": "Owner token. Milestone 2 is still PLANNED after the decline, so nothing has to be voided."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Retention",
+      "description": "Warranty retention: too early, move the clock, release.",
+      "item": [
+        {
+          "name": "Release retention too early",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 409', () => pm.response.to.have.status(409));",
+                  "pm.test('Error code is RETENTION_NOT_DUE', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.error).to.eql('RETENTION_NOT_DUE');",
+                  "    pm.expect(body.errorDescription).to.be.a('string').and.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('Details give the release date', () => pm.expect(pm.response.json().details.releaseAt).to.match(/^\\d{4}-\\d{2}-\\d{2}$/));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestoneId}}/release-retention",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestoneId}}",
+                "release-retention"
+              ]
+            },
+            "description": "Owner token. The 30-day warranty period has not ended yet."
+          },
+          "response": []
+        },
+        {
+          "name": "Advance project clock 30 days",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Project date moved forward', () => {",
+                  "    const before = pm.collectionVariables.get('projectToday');",
+                  "    pm.expect(pm.response.json().today > before).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/demo/advance-clock",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "demo",
+                "advance-clock"
+              ]
+            },
+            "description": "Demo only. Moves this project's clock; PayPal authorization expiry is not affected.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"days\": 30\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Release retention",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const m = pm.response.json().milestones.find((x) => x.id === pm.collectionVariables.get('milestoneId'));",
+                  "pm.test('Retention paid and milestone CLOSED', () => {",
+                  "    pm.expect(m.retention.status).to.eql('paid');",
+                  "    pm.expect(m.status).to.eql('CLOSED');",
+                  "    pm.expect(m.payouts.map((p) => p.kind)).to.include('retention');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestoneId}}/release-retention",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestoneId}}",
+                "release-retention"
+              ]
+            },
+            "description": "Owner token. Pays the retention to the contractor."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Disputes",
+      "description": "Simulated dispute: open, blocked release, evidence, resolve, evidence pack.",
+      "item": [
+        {
+          "name": "Fund milestone 3 with test card",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const m = pm.response.json().milestones.find((x) => x.id === pm.collectionVariables.get('milestone3Id'));",
+                  "pm.test('Milestone 3 is FUNDED', () => pm.expect(m.status).to.eql('FUNDED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestone3Id}}/demo/fund-with-test-card",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestone3Id}}",
+                "demo",
+                "fund-with-test-card"
+              ]
+            },
+            "description": "Demo only. Milestone 3 has no upfront part: the whole amount stays authorized.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"scenario\": \"approve\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Open demo dispute on milestone 3",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const m = pm.response.json().milestones.find((x) => x.id === pm.collectionVariables.get('milestone3Id'));",
+                  "pm.test('Simulated dispute waiting for the seller', () => {",
+                  "    pm.expect(m.dispute.id).to.match(/^PP-D-DEMO-/);",
+                  "    pm.expect(m.dispute.status).to.eql('WAITING_FOR_SELLER_RESPONSE');",
+                  "    pm.expect(m.dispute.simulated).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestone3Id}}/demo/dispute",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestone3Id}}",
+                "demo",
+                "dispute"
+              ]
+            },
+            "description": "Demo only. Simulates a PayPal dispute; money on this milestone is frozen."
+          },
+          "response": []
+        },
+        {
+          "name": "Approve during dispute (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 409', () => pm.response.to.have.status(409));",
+                  "pm.test('Error code is DISPUTE_OPEN', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.error).to.eql('DISPUTE_OPEN');",
+                  "    pm.expect(body.errorDescription).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestone3Id}}/approve",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestone3Id}}",
+                "approve"
+              ]
+            },
+            "description": "Owner token. Releasing money is blocked while a dispute is open."
+          },
+          "response": []
+        },
+        {
+          "name": "Contractor submits dispute evidence",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const view = pm.response.json();",
+                  "const m = view.milestones.find((x) => x.id === pm.collectionVariables.get('milestone3Id'));",
+                  "pm.test('Dispute under review, contractor view', () => {",
+                  "    pm.expect(view.role).to.eql('contractor');",
+                  "    pm.expect(m.dispute.status).to.eql('UNDER_REVIEW');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{contractorToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestone3Id}}/dispute/evidence",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestone3Id}}",
+                "dispute",
+                "evidence"
+              ]
+            },
+            "description": "Either token. For a simulated dispute nothing is sent to PayPal."
+          },
+          "response": []
+        },
+        {
+          "name": "Resolve demo dispute",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const m = pm.response.json().milestones.find((x) => x.id === pm.collectionVariables.get('milestone3Id'));",
+                  "pm.test('Dispute resolved', () => pm.expect(m.dispute.status).to.eql('RESOLVED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestone3Id}}/demo/dispute/resolve",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestone3Id}}",
+                "demo",
+                "dispute",
+                "resolve"
+              ]
+            },
+            "description": "Demo only. Either token."
+          },
+          "response": []
+        },
+        {
+          "name": "Get evidence pack for milestone 3",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const pack = pm.response.json();",
+                  "pm.test('Pack has the PayPal references and an intact ledger', () => {",
+                  "    pm.expect(pack.milestone.id).to.eql(pm.collectionVariables.get('milestone3Id'));",
+                  "    pm.expect(pack.milestone.paypal.authorizationId).to.be.a('string');",
+                  "    pm.expect(pack.milestone.paypal.disputeId).to.match(/^PP-D-DEMO-/);",
+                  "    pm.expect(pack.ledger).to.be.an('array').that.is.not.empty;",
+                  "    pm.expect(pack.ledgerIntegrity.valid).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestone3Id}}/evidence",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestone3Id}}",
+                "evidence"
+              ]
+            },
+            "description": "Either token."
+          },
+          "response": []
+        },
+        {
+          "name": "Owner cancels milestone 3 (voids authorization)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const m = pm.response.json().milestones.find((x) => x.id === pm.collectionVariables.get('milestone3Id'));",
+                  "pm.test('Milestone 3 is CANCELLED', () => pm.expect(m.status).to.eql('CANCELLED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestone3Id}}/cancel",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestone3Id}}",
+                "cancel"
+              ]
+            },
+            "description": "Owner token. Voids the authorization, so the held amount is never taken."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "6. Error cases",
+      "description": "Key unhappy paths: authentication, authorization, validation, routing.",
+      "item": [
+        {
+          "name": "No token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Error code is UNAUTHORIZED', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.error).to.eql('UNAUTHORIZED');",
+                  "    pm.expect(body.errorDescription).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects", "{{projectId}}"]
+            },
+            "description": "No Authorization header."
+          },
+          "response": []
+        },
+        {
+          "name": "Contractor tries to approve (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 403', () => pm.response.to.have.status(403));",
+                  "pm.test('Error code is FORBIDDEN', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.error).to.eql('FORBIDDEN');",
+                  "    pm.expect(body.errorDescription).to.be.a('string').and.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('Says who can do it', () => pm.expect(pm.response.json().errorDescription).to.eql('Only the owner can do this.'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{contractorToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestoneId}}/approve",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestoneId}}",
+                "approve"
+              ]
+            },
+            "description": "Valid token, wrong role."
+          },
+          "response": []
+        },
+        {
+          "name": "Create project with bad body (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error code is Bad Request', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.error).to.eql('Bad Request');",
+                  "    pm.expect(body.errorDescription).to.be.a('string').and.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('Names the invalid field', () => pm.expect(pm.response.json().errorDescription).to.include('templateId'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects"]
+            },
+            "description": "templateId must match ^[a-z][a-z0-9-]*$. Counts against the 30/hour create limit.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"templateId\": \"Renovation!\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Reject with too short reason (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error code is Bad Request', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.error).to.eql('Bad Request');",
+                  "    pm.expect(body.errorDescription).to.be.a('string').and.not.empty;",
+                  "});",
+                  "",
+                  "pm.test('Names the invalid field', () => pm.expect(pm.response.json().errorDescription).to.include('reason'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/milestones/{{milestoneId}}/reject",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "milestones",
+                "{{milestoneId}}",
+                "reject"
+              ]
+            },
+            "description": "reason must be 3 to 300 characters after trimming. The body is validated before the milestone state.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"no\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Unknown endpoint (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 404', () => pm.response.to.have.status(404));",
+                  "pm.test('Error code is Not Found', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.error).to.eql('Not Found');",
+                  "    pm.expect(body.errorDescription).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "auth": {
+              "type": "noauth"
+            },
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/does-not-exist",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "does-not-exist"]
+            },
+            "description": "Unknown paths under /api and /paypal-api."
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:4510",
+      "type": "string"
+    },
+    {
+      "key": "projectId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ownerToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "contractorToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "milestoneId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "milestone2Id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "milestone3Id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "projectToday",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "lastProofDecision",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}

@@ -1,0 +1,2072 @@
+openapi: 3.1.0
+info:
+  title: RealPay API
+  version: 1.0.0
+  summary: Milestone payments on PayPal, released only when the work is proven.
+  description: |
+    RealPay splits a project (a bathroom renovation, a holiday rental booking) into
+    milestones and funds each one with its own **PayPal Orders v2 order with
+    `intent: AUTHORIZE`**:
+
+    1. **Fund.** The owner authorizes the full milestone value (upfront + held).
+    2. **Upfront.** The upfront part is captured at once (`final_capture: false`) and paid
+       out to the supplier with PayPal Payouts.
+    3. **Proof.** The contractor uploads a photo or PDF. Free prechecks run first (file type,
+       EXIF date and GPS, duplicate hash, prompt injection in the note), then an AI vision
+       model checks it against the milestone checklist. A release policy decides
+       `release`, `review` or `reject`.
+    4. **Release.** On `release` (or when the owner approves) the held part is captured
+       (`final_capture: true`) and paid out to the contractor **minus the retention**
+       (5% in the bundled templates).
+    5. **Retention.** The retention is paid out after the warranty period, or refunded to
+       the owner from the held capture.
+
+    Cancelling a funded milestone voids the remaining authorization. Every money movement
+    and every AI or human decision is appended to a hash-chained audit ledger.
+
+    ### Authentication: capability links
+    `POST /api/projects` returns two secret tokens, shown once (only their SHA-256 is
+    stored). Send one as `Authorization: Bearer <token>`:
+
+    | Token | Role | Can |
+    |---|---|---|
+    | `ownerToken` | `owner` | fund, approve, reject, cancel, reauthorize, manage retention, demo controls |
+    | `contractorToken` | `contractor` | upload proofs |
+
+    Both roles can read the project, retry failed settlement steps and submit dispute
+    evidence. A missing token, a wrong token and an unknown project all return the same
+    `401 UNAUTHORIZED`, so project ids cannot be probed. A valid token with the wrong role
+    returns `403 FORBIDDEN`.
+
+    ### Errors
+    Application errors use one shape, `{ "error", "errorDescription", "details"? }`:
+    `error` is a stable machine-readable code (for example `INVALID_MILESTONE_STATE`).
+    Request validation failures return `400` with `error: "Bad Request"`. Errors returned
+    by PayPal itself are forwarded **unchanged, with PayPal's own status code and body**
+    (including `debug_id`), see `PayPalError`. Unknown paths under `/api` and `/paypal-api`
+    return `404 {"error": "Not Found", "errorDescription": "No such endpoint."}`.
+
+    ### Money
+    Amounts are integer euro cents internally and are returned as
+    `{ "value": "450.00", "display": "€450.00" }`. Currency is always `EUR`.
+
+    ### Demo controls
+    Operations tagged **Demo** (`x-demo-only: true`) exist only when the server runs with
+    `DEMO_MODE=true`; otherwise they answer `404 NOT_FOUND` ("Demo controls are disabled.")
+    after authentication. RealPay is a hackathon project and only ever talks to the PayPal
+    **sandbox**.
+  license:
+    name: See LICENSE in the repository
+servers:
+  - url: http://localhost:4510
+    description: Local demo server (DEMO_MODE=true)
+  - url: http://localhost:8080
+    description: Local server, default PORT
+tags:
+  - name: Projects
+    description: Templates, project creation and the role-aware project view.
+  - name: Milestones
+    description: Owner decisions and settlement retries on a single milestone.
+  - name: Funding
+    x-displayName: Funding (PayPal)
+    description: |
+      PayPal JS SDK v6 integration: client id, create an AUTHORIZE order for a milestone,
+      then authorize it after the buyer approves.
+  - name: Proofs
+    description: Proof-of-work uploads, AI verification and owner rejection.
+  - name: Retention
+    description: The warranty retention kept back from each release.
+  - name: Disputes
+    description: Evidence pack and evidence submission for PayPal disputes.
+  - name: Webhooks
+    description: PayPal webhook receiver.
+  - name: Demo
+    description: Sandbox-only shortcuts. 404 unless `DEMO_MODE=true`.
+  - name: Health
+    description: Liveness probe.
+
+security:
+  - capabilityToken: []
+
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      operationId: getHealth
+      summary: Liveness probe
+      security: []
+      responses:
+        "200":
+          description: The process is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ok
+
+  /api/templates:
+    get:
+      tags: [Projects]
+      operationId: listTemplates
+      summary: List project templates
+      description: |
+        Lists the niches RealPay can run. A niche is data, not code: each template is a JSON
+        file that drives the same milestone engine. The site coordinates used for the GPS
+        check are not exposed.
+      security: []
+      responses:
+        "200":
+          description: All loaded templates.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [templates]
+                properties:
+                  templates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Template"
+
+  /api/projects:
+    post:
+      tags: [Projects]
+      operationId: createProject
+      summary: Create a project
+      description: |
+        Creates a project from a template, plans its milestones sequentially from today and
+        returns the owner and contractor capability tokens. **The tokens are returned only
+        once**; store them. The response does not include milestone ids: read them with
+        `GET /api/projects/{projectId}`.
+
+        Rate limited to 30 requests per hour per client IP (`RateLimit` and
+        `RateLimit-Policy` headers, IETF draft 8).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectRequest"
+            example:
+              templateId: renovation
+              title: Bathroom renovation, Barcelona
+              ownerName: Ana
+              contractorName: Reformas Pérez
+      responses:
+        "201":
+          description: Project created.
+          headers:
+            RateLimit:
+              $ref: "#/components/headers/RateLimit"
+            RateLimit-Policy:
+              $ref: "#/components/headers/RateLimitPolicy"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatedProject"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: "`TEMPLATE_NOT_FOUND`: no template with that id."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: TEMPLATE_NOT_FOUND
+                errorDescription: No template "nope".
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/projects/{projectId}:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      tags: [Projects]
+      operationId: getProject
+      summary: Get the project view
+      description: |
+        Returns the role-aware project view: milestones with schedule, money, PayPal
+        references, proofs and payouts, the actions the caller may take on each milestone,
+        project totals and the audit ledger (newest first) with its integrity check.
+        Never contains token hashes, storage paths or receiver emails.
+      x-roles: [owner, contractor]
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/projects/{projectId}/milestones/{milestoneId}/approve:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/milestoneId"
+    post:
+      tags: [Milestones]
+      operationId: approveRelease
+      summary: Approve and release the held funds
+      description: |
+        The owner releases the held part without waiting for the AI (or after reviewing a
+        proof in `IN_REVIEW`). RealPay captures the held amount from the authorization
+        (`final_capture: true`), sets the retention aside, pays the rest out to the
+        contractor and shifts the forecast of later milestones.
+
+        Resulting status: `RELEASED` (retention held) or `CLOSED` (no retention).
+        Allowed from `FUNDED` or `IN_REVIEW` with no open dispute.
+      x-roles: [owner]
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/MilestoneNotFound"
+        "409":
+          description: |
+            - `INVALID_MILESTONE_STATE`: status is not `FUNDED` or `IN_REVIEW` (`details.status`, `details.allowed`).
+            - `DISPUTE_OPEN`: a PayPal dispute is open; the money is frozen.
+            - `NOT_FUNDED`: the milestone has no authorization.
+            - `MILESTONE_BUSY`: another request is processing this milestone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: INVALID_MILESTONE_STATE
+                errorDescription: Cannot release a milestone that is PLANNED.
+                details:
+                  status: PLANNED
+                  allowed: [FUNDED, IN_REVIEW]
+        default:
+          $ref: "#/components/responses/PayPalError"
+
+  /api/projects/{projectId}/milestones/{milestoneId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/milestoneId"
+    post:
+      tags: [Milestones]
+      operationId: cancelMilestone
+      summary: Cancel a milestone
+      description: |
+        Cancels a `PLANNED`, `FUNDED` or `IN_REVIEW` milestone. If it was funded, the
+        authorization is voided, so the held part is never taken. An upfront part already
+        captured stays with the supplier. Resulting status: `CANCELLED`.
+      x-roles: [owner]
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/MilestoneNotFound"
+        "409":
+          description: |
+            - `INVALID_MILESTONE_STATE`: status is `RELEASED`, `CLOSED` or `CANCELLED`.
+            - `DISPUTE_OPEN`: a PayPal dispute is open.
+            - `MILESTONE_BUSY`: another request is processing this milestone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/PayPalError"
+
+  /api/projects/{projectId}/milestones/{milestoneId}/reauthorize:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/milestoneId"
+    post:
+      tags: [Milestones]
+      operationId: reauthorizeMilestone
+      summary: Reauthorize the held amount
+      description: |
+        Reauthorizes the held amount on the existing authorization (PayPal
+        `POST /v2/payments/authorizations/{id}/reauthorize`) to extend its validity, and
+        stores the new authorization id and expiry. PayPal only accepts a reauthorization
+        inside its own time window; outside it, PayPal's error is forwarded.
+        Allowed from `FUNDED` or `IN_REVIEW`.
+      x-roles: [owner]
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/MilestoneNotFound"
+        "409":
+          description: |
+            - `INVALID_MILESTONE_STATE`: status is not `FUNDED` or `IN_REVIEW`.
+            - `NOT_FUNDED`: the milestone has no authorization.
+            - `MILESTONE_BUSY`: another request is processing this milestone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/PayPalError"
+
+  /api/projects/{projectId}/milestones/{milestoneId}/retry-upfront:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/milestoneId"
+    post:
+      tags: [Milestones]
+      operationId: retryUpfront
+      summary: Retry the upfront settlement
+      description: |
+        Re-runs the upfront step when it did not complete after funding: captures the
+        upfront amount if it has not been captured yet, then sends the supplier payout if
+        it is missing or `FAILED`. Idempotent: PayPal-Request-Id and `sender_batch_id` are
+        deterministic, so a retry can never pay twice. Allowed from `FUNDED` or `IN_REVIEW`.
+        Offered in `actions` as `retryUpfront`.
+      x-roles: [owner, contractor]
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/MilestoneNotFound"
+        "409":
+          description: |
+            - `INVALID_MILESTONE_STATE`: status is not `FUNDED` or `IN_REVIEW`.
+            - `MILESTONE_BUSY`: another request is processing this milestone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/PayPalError"
+
+  /api/projects/{projectId}/milestones/{milestoneId}/retry-payout:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/milestoneId"
+    post:
+      tags: [Milestones]
+      operationId: retryPayout
+      summary: Retry a failed payout
+      description: |
+        Resends a payout whose status is `FAILED`, with the same `sender_batch_id`
+        (`<milestoneId>-<kind>`), receiver and amount. Offered in `actions` as `retryPayout`.
+      x-roles: [owner, contractor]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RetryPayoutRequest"
+            example:
+              kind: contractor
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/MilestoneNotFound"
+        "409":
+          description: |
+            - `PAYOUT_NOT_FAILED`: there is no `FAILED` payout of that kind.
+            - `MILESTONE_BUSY`: another request is processing this milestone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/projects/{projectId}/milestones/{milestoneId}/proofs:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/milestoneId"
+    post:
+      tags: [Proofs]
+      operationId: submitProof
+      summary: Upload a proof of work
+      description: |
+        The contractor uploads one JPEG, PNG or PDF (max 8 MiB) as the multipart field
+        **`file`**, with an optional `note`. RealPay then:
+
+        1. Runs free prechecks. **Hard flags** reject the proof outright:
+           `file_too_large`, `unsupported_file_type`, `photo_required` (PDF sent for a photo
+           milestone), `duplicate_proof`, `instructions_in_note`, `taken_away_from_site`.
+           **Soft flags** force human review: `edited_with_software`,
+           `taken_outside_milestone_window`, `no_capture_date`, `no_location`.
+        2. If there is no hard flag, asks the AI verifier whether the checklist is met.
+        3. Applies the release policy: `release` only when the checklist is met with at
+           least the project's `minConfidence`, no soft flag, a held amount within
+           `autoReleaseMax` and no open dispute. Otherwise `review` or `reject`.
+
+        A rejected proof is still a successful upload (`201`, `decision: "reject"`): the
+        milestone returns to `FUNDED` and the contractor can try again. `review` moves it
+        to `IN_REVIEW` for the owner. `release` captures and pays out exactly like
+        `approve`. Allowed from `FUNDED` or `IN_REVIEW`.
+
+        Rate limited to 20 uploads per 10 minutes per client IP.
+      x-roles: [contractor]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/ProofUploadRequest"
+            encoding:
+              file:
+                contentType: image/jpeg, image/png, application/pdf
+      responses:
+        "201":
+          description: Proof stored and decided.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProofOutcome"
+              examples:
+                rejected:
+                  summary: AI is confident the checklist is not met
+                  value:
+                    proofId: prf_3f2a9c1d7e6b4a01
+                    decision: reject
+                    reason: The AI is confident (0.95) the checklist is not met.
+                    status: FUNDED
+                released:
+                  summary: Auto-released
+                  value:
+                    proofId: prf_9b1e0c2d4f6a8e10
+                    decision: release
+                    reason: Checklist met with confidence 0.92, within the auto-release cap.
+                    status: RELEASED
+        "400":
+          description: |
+            - `PROOF_MISSING`: no file in the `file` field.
+            - `Bad Request`: `note` longer than 500 characters.
+            - Multer limits: `LIMIT_UNEXPECTED_FILE` (file sent under another field name, or a
+              second file), `LIMIT_FILE_COUNT`, `LIMIT_FIELD_COUNT` (more than 4 text fields).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: PROOF_MISSING
+                errorDescription: Attach the proof as the "file" field.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/MilestoneNotFound"
+        "409":
+          description: |
+            - `INVALID_MILESTONE_STATE`: status is not `FUNDED` or `IN_REVIEW`.
+            - `MILESTONE_BUSY`: another request is processing this milestone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "413":
+          description: "`LIMIT_FILE_SIZE`: the file is larger than 8 MiB (8,388,608 bytes)."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: LIMIT_FILE_SIZE
+                errorDescription: File too large
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        default:
+          $ref: "#/components/responses/PayPalError"
+
+  /api/projects/{projectId}/milestones/{milestoneId}/reject:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/milestoneId"
+    post:
+      tags: [Proofs]
+      operationId: rejectProof
+      summary: Reject a proof under review
+      description: |
+        The owner rejects the proof that is waiting for review. The milestone goes back
+        from `IN_REVIEW` to `FUNDED` (money stays authorized) and the reason is recorded in
+        the ledger. Allowed only from `IN_REVIEW`.
+      x-roles: [owner]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+            example:
+              reason: The photo shows a different room; please send the tiled bathroom.
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/MilestoneNotFound"
+        "409":
+          description: "`INVALID_MILESTONE_STATE`: status is not `IN_REVIEW`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: INVALID_MILESTONE_STATE
+                errorDescription: Cannot reject proof for a milestone that is FUNDED.
+                details:
+                  status: FUNDED
+                  allowed: [IN_REVIEW]
+
+  /api/projects/{projectId}/milestones/{milestoneId}/release-retention:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/milestoneId"
+    post:
+      tags: [Retention]
+      operationId: releaseRetention
+      summary: Release the warranty retention
+      description: |
+        Pays the retention out to the contractor once the warranty period has ended
+        (`retention.releaseAt` <= project `today`). On a successful payout the milestone
+        becomes `CLOSED` with `retention.status: paid`; if the payout fails it stays
+        `RELEASED` and can be retried with `retry-payout` (`kind: retention`).
+        Allowed from `RELEASED` with no open dispute.
+      x-roles: [owner]
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/MilestoneNotFound"
+        "409":
+          description: |
+            - `INVALID_MILESTONE_STATE`: status is not `RELEASED`.
+            - `DISPUTE_OPEN`: a PayPal dispute is open.
+            - `NO_RETENTION_HELD`: there is no retention held.
+            - `RETENTION_NOT_DUE`: the warranty period has not ended (`details.releaseAt`).
+            - `MILESTONE_BUSY`: another request is processing this milestone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: RETENTION_NOT_DUE
+                errorDescription: The warranty period ends on 2026-12-10.
+                details:
+                  releaseAt: "2026-12-10"
+
+  /api/projects/{projectId}/milestones/{milestoneId}/refund-retention:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/milestoneId"
+    post:
+      tags: [Retention]
+      operationId: refundRetention
+      summary: Refund the warranty retention to the owner
+      description: |
+        Refunds the retention amount from the held capture back to the owner (PayPal
+        `POST /v2/payments/captures/{id}/refund`), for example when a defect appears during
+        the warranty period. Resulting status: `CLOSED` with `retention.status: refunded`.
+        Allowed from `RELEASED`, at any time during the warranty period.
+      x-roles: [owner]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReasonRequest"
+            example:
+              reason: Grout cracked in week two and was not repaired.
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/MilestoneNotFound"
+        "409":
+          description: |
+            - `INVALID_MILESTONE_STATE`: status is not `RELEASED`.
+            - `NO_RETENTION_HELD`: there is no retention held.
+            - `MILESTONE_BUSY`: another request is processing this milestone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/PayPalError"
+
+  /api/projects/{projectId}/milestones/{milestoneId}/evidence:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/milestoneId"
+    get:
+      tags: [Disputes]
+      operationId: getEvidencePack
+      summary: Get the evidence pack
+      description: |
+        Everything RealPay knows about one milestone, ready for a dispute: checklist,
+        PayPal references, every proof with its AI verdict and decision, the milestone's
+        ledger entries and the integrity check of the project's ledger chain.
+      x-roles: [owner, contractor]
+      responses:
+        "200":
+          description: The evidence pack.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidencePack"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/MilestoneNotFound"
+
+  /api/projects/{projectId}/milestones/{milestoneId}/dispute/evidence:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/milestoneId"
+    post:
+      tags: [Disputes]
+      operationId: submitDisputeEvidence
+      summary: Submit evidence to the open dispute
+      description: |
+        Sends the evidence pack to PayPal (`POST /v1/customer/disputes/{id}/provide-evidence`):
+        a notes summary plus up to five non-rejected proof files. For a simulated demo
+        dispute (`dispute.simulated: true`) nothing is sent to PayPal. The dispute moves to
+        `UNDER_REVIEW`.
+      x-roles: [owner, contractor]
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/MilestoneNotFound"
+        "409":
+          description: |
+            - `NO_OPEN_DISPUTE`: there is no open dispute on this milestone.
+            - `MILESTONE_BUSY`: another request is processing this milestone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/PayPalError"
+
+  /api/projects/{projectId}/milestones/{milestoneId}/demo/fund-with-test-card:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/milestoneId"
+    post:
+      tags: [Demo, Funding]
+      operationId: demoFundWithTestCard
+      summary: Fund a milestone with a sandbox test card
+      description: |
+        **Demo only (404 unless `DEMO_MODE=true`).** Funds a `PLANNED` milestone without a
+        buyer login: creates the AUTHORIZE order with the sandbox card configured in
+        `DEMO_TEST_CARD`, authorizes it and settles the upfront part, exactly like the
+        PayPal checkout flow. `scenario: decline` sets the card holder name to PayPal's
+        documented `CCREJECT-REFUSED` trigger to show the unhappy path. A decline takes no
+        money and leaves the milestone `PLANNED`.
+      x-demo-only: true
+      x-roles: [owner]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestCardRequest"
+            examples:
+              approve:
+                value:
+                  scenario: approve
+              decline:
+                value:
+                  scenario: decline
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentDeclined"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: |
+            - `NOT_FOUND`: demo controls are disabled (`DEMO_MODE` is not `true`).
+            - `MILESTONE_NOT_FOUND`: no milestone with that id in this project.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: NOT_FOUND
+                errorDescription: Demo controls are disabled.
+        "409":
+          description: |
+            - `INVALID_MILESTONE_STATE`: status is not `PLANNED`.
+            - `MILESTONE_BUSY`: another request is processing this milestone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: "`TEST_CARD_MISSING`: `DEMO_TEST_CARD` is not configured."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/PayPalError"
+
+  /api/projects/{projectId}/milestones/{milestoneId}/demo/dispute:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/milestoneId"
+    post:
+      tags: [Demo, Disputes]
+      operationId: demoOpenDispute
+      summary: Open a simulated dispute
+      description: |
+        **Demo only (404 unless `DEMO_MODE=true`).** Simulates a PayPal dispute
+        (`MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED`) with an id prefixed `PP-D-DEMO-` and
+        status `WAITING_FOR_SELLER_RESPONSE`. While it is open, approve, cancel and
+        retention release answer `409 DISPUTE_OPEN` and new proofs go to review.
+        Allowed from `FUNDED`, `IN_REVIEW` or `RELEASED`.
+      x-demo-only: true
+      x-roles: [owner]
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/DemoOrMilestoneNotFound"
+        "409":
+          description: "`INVALID_MILESTONE_STATE`: status is not `FUNDED`, `IN_REVIEW` or `RELEASED`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/projects/{projectId}/milestones/{milestoneId}/demo/dispute/resolve:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/milestoneId"
+    post:
+      tags: [Demo, Disputes]
+      operationId: demoResolveDispute
+      summary: Resolve a simulated dispute
+      description: |
+        **Demo only (404 unless `DEMO_MODE=true`).** Marks the simulated dispute
+        `RESOLVED` (in the seller's favour), which unfreezes the milestone. Only works on
+        simulated (`PP-D-DEMO-`) disputes.
+      x-demo-only: true
+      x-roles: [owner, contractor]
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/DemoOrMilestoneNotFound"
+        "409":
+          description: "`NO_OPEN_DISPUTE`: there is no simulated dispute on this milestone."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/projects/{projectId}/demo/advance-clock:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    post:
+      tags: [Demo]
+      operationId: demoAdvanceClock
+      summary: Move the project clock forward
+      description: |
+        **Demo only (404 unless `DEMO_MODE=true`).** Moves this project's clock forward by
+        `days` (cumulative), so warranty periods and schedules can be shown without
+        waiting. Affects `today`, retention due dates and proof date windows of this
+        project only; PayPal authorization expiry is real time and is not affected.
+      x-demo-only: true
+      x-roles: [owner]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdvanceClockRequest"
+            example:
+              days: 30
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/DemoDisabled"
+
+  /paypal-api/auth/browser-safe-client-id:
+    get:
+      tags: [Funding]
+      operationId: getBrowserSafeClientId
+      summary: Get the PayPal client id
+      description: |
+        Returns the sandbox client id the PayPal JS SDK v6 needs in the browser. It is
+        public by design; the client secret never leaves the server.
+      security: []
+      responses:
+        "200":
+          description: The client id.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [clientId]
+                properties:
+                  clientId:
+                    type: string
+              example:
+                clientId: AYx...sandbox-client-id
+
+  /paypal-api/checkout/orders/create-order-for-milestone:
+    post:
+      tags: [Funding]
+      operationId: createOrderForMilestone
+      summary: Create the PayPal order for a milestone
+      description: |
+        Creates one PayPal Orders v2 order with `intent: AUTHORIZE` for the full milestone
+        value (upfront + held, EUR). Pass the returned `id` to the PayPal JS SDK; after the
+        buyer approves, call `authorize`. The project is identified by `projectId` in the
+        body, so a body without `projectId` answers `401`. Allowed from `PLANNED`.
+      x-roles: [owner]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MilestoneRef"
+      responses:
+        "201":
+          description: Order created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id]
+                properties:
+                  id:
+                    type: string
+                    description: PayPal order id.
+                    example: 5O190127TN364715T
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/MilestoneNotFound"
+        "409":
+          description: "`INVALID_MILESTONE_STATE`: status is not `PLANNED`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/PayPalError"
+
+  /paypal-api/checkout/orders/{orderId}/authorize:
+    parameters:
+      - name: orderId
+        in: path
+        required: true
+        description: The PayPal order id returned by `create-order-for-milestone`.
+        schema:
+          type: string
+          pattern: "^[A-Z0-9]{10,24}$"
+        example: 5O190127TN364715T
+    post:
+      tags: [Funding]
+      operationId: authorizeOrderForMilestone
+      summary: Authorize the approved order
+      description: |
+        Authorizes the order the buyer just approved (PayPal
+        `POST /v2/checkout/orders/{id}/authorize`), stores the authorization and its expiry,
+        then captures the upfront part and pays it out to the supplier. The order must be
+        the one created for this milestone. Allowed from `PLANNED`; the result is `FUNDED`.
+      x-roles: [owner]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MilestoneRef"
+      responses:
+        "200":
+          description: Funds authorized.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [milestoneId, status]
+                properties:
+                  milestoneId:
+                    type: string
+                  status:
+                    $ref: "#/components/schemas/MilestoneStatus"
+              example:
+                milestoneId: ms_f8f80c4d1d7549c4
+                status: FUNDED
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "402":
+          $ref: "#/components/responses/PaymentDeclined"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/MilestoneNotFound"
+        "409":
+          description: |
+            - `INVALID_MILESTONE_STATE`: status is not `PLANNED`.
+            - `ORDER_MISMATCH`: that order does not belong to this milestone.
+            - `MILESTONE_BUSY`: another request is processing this milestone.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/PayPalError"
+
+  /paypal-api/webhooks:
+    post:
+      tags: [Webhooks]
+      operationId: receivePayPalWebhook
+      summary: Receive a PayPal webhook event
+      description: |
+        PayPal webhook receiver. Every event is checked with PayPal
+        `POST /v1/notifications/verify-webhook-signature` (using `PAYPAL_WEBHOOK_ID`) before it
+        can touch a milestone; without a configured webhook id every event is refused.
+        Events are de-duplicated by `id`.
+
+        - `PAYMENT.PAYOUTS*`: updates the payout status matched by `payout_batch_id`.
+        - `CUSTOMER.DISPUTE.*`: records the dispute id and status on the matched milestone
+          (`RESOLVED` for `CUSTOMER.DISPUTE.RESOLVED`).
+        - Any other event matched to a milestone (by resource `id`, `custom_id`, `dispute_id`
+          or the disputed `seller_transaction_id`) is appended to the ledger.
+
+        Unmatched events are acknowledged with `handled: false`.
+      security: []
+      parameters:
+        - { name: PAYPAL-AUTH-ALGO, in: header, schema: { type: string } }
+        - {
+            name: PAYPAL-CERT-URL,
+            in: header,
+            schema: { type: string, format: uri },
+          }
+        - { name: PAYPAL-TRANSMISSION-ID, in: header, schema: { type: string } }
+        - {
+            name: PAYPAL-TRANSMISSION-SIG,
+            in: header,
+            schema: { type: string },
+          }
+        - {
+            name: PAYPAL-TRANSMISSION-TIME,
+            in: header,
+            schema: { type: string },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookEvent"
+      responses:
+        "200":
+          description: Event verified and acknowledged.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [handled, duplicate]
+                properties:
+                  handled:
+                    type: boolean
+                    description: The event matched a payout or milestone and was applied.
+                  duplicate:
+                    type: boolean
+                    description: The event id was already processed; nothing was done.
+              example:
+                handled: true
+                duplicate: false
+        "400":
+          description: "`WEBHOOK_NOT_VERIFIED`: the signature did not verify, or the event has no `id`."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: WEBHOOK_NOT_VERIFIED
+                errorDescription: PayPal could not verify this webhook signature.
+        default:
+          $ref: "#/components/responses/PayPalError"
+
+components:
+  securitySchemes:
+    capabilityToken:
+      type: http
+      scheme: bearer
+      bearerFormat: RealPay capability token
+      description: |
+        `ownerToken` or `contractorToken` returned once by `POST /api/projects`
+        (24 random bytes, base64url). The token is bound to one project and one role.
+
+  parameters:
+    projectId:
+      name: projectId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 64
+      example: prj_0e7c870a8db34c3f
+    milestoneId:
+      name: milestoneId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 64
+      example: ms_f8f80c4d1d7549c4
+
+  headers:
+    RateLimit:
+      description: Remaining quota (IETF draft 8), for example `"30-in-1hr"; r=29; t=3600`.
+      schema:
+        type: string
+    RateLimitPolicy:
+      description: Quota policy (IETF draft 8), for example `"30-in-1hr"; q=30; w=3600`.
+      schema:
+        type: string
+
+  responses:
+    ProjectView:
+      description: The updated project view for the caller's role.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProjectView"
+    BadRequest:
+      description: |
+        The body or a path parameter failed validation (`error: "Bad Request"`,
+        `errorDescription` lists each issue and its field).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: Bad Request
+            errorDescription: |-
+              ✖ Invalid string: must match pattern /^[a-z][a-z0-9-]*$/
+                → at templateId
+    Unauthorized:
+      description: |
+        `UNAUTHORIZED`: missing or wrong token, or unknown project. The same answer is given
+        in every case so project ids cannot be probed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: UNAUTHORIZED
+            errorDescription: This link is not valid for this project.
+    Forbidden:
+      description: "`FORBIDDEN`: the token is valid but its role cannot perform this action."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: FORBIDDEN
+            errorDescription: Only the owner can do this.
+    MilestoneNotFound:
+      description: "`MILESTONE_NOT_FOUND`: no milestone with that id in this project."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: MILESTONE_NOT_FOUND
+            errorDescription: No milestone with that id in this project.
+    DemoDisabled:
+      description: "`NOT_FOUND`: demo controls are disabled (`DEMO_MODE` is not `true`)."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: NOT_FOUND
+            errorDescription: Demo controls are disabled.
+    DemoOrMilestoneNotFound:
+      description: |
+        - `NOT_FOUND`: demo controls are disabled (`DEMO_MODE` is not `true`).
+        - `MILESTONE_NOT_FOUND`: no milestone with that id in this project.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PaymentDeclined:
+      description: |
+        `PAYMENT_DECLINED`: PayPal declined the authorization. No money was taken and the
+        milestone stays `PLANNED`; `details` carries PayPal's status and processor response
+        code.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: PAYMENT_DECLINED
+            errorDescription: The payment was declined. No money was taken; try another payment method.
+            details:
+              status: DENIED
+              processorResponseCode: "0500"
+    RateLimited:
+      description: Too many requests from this client. Retry after the window in the `RateLimit` header.
+      headers:
+        RateLimit:
+          $ref: "#/components/headers/RateLimit"
+        RateLimit-Policy:
+          $ref: "#/components/headers/RateLimitPolicy"
+      content:
+        text/html:
+          schema:
+            type: string
+          example: Too many requests, please try again later.
+    PayPalError:
+      description: |
+        An error returned by the PayPal REST API during this operation, forwarded unchanged
+        with PayPal's own HTTP status (typically `400`, `401`, `403`, `404`, `422`). Use
+        `debug_id` with PayPal support. Unexpected server failures return `500` with
+        `error: "Internal Server Error"`.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/PayPalError"
+              - $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [error, errorDescription]
+      properties:
+        error:
+          type: string
+          description: |
+            Stable machine-readable code. Domain codes: `UNAUTHORIZED`, `FORBIDDEN`,
+            `NOT_FOUND`, `TEMPLATE_NOT_FOUND`, `PROJECT_NOT_FOUND`, `MILESTONE_NOT_FOUND`,
+            `INVALID_MILESTONE_STATE`, `MILESTONE_BUSY`, `DISPUTE_OPEN`, `NOT_FUNDED`,
+            `ORDER_MISMATCH`, `PAYMENT_DECLINED`, `PROOF_MISSING`, `NO_RETENTION_HELD`,
+            `RETENTION_NOT_DUE`, `PAYOUT_NOT_FAILED`, `NO_OPEN_DISPUTE`,
+            `WEBHOOK_NOT_VERIFIED`, `TEST_CARD_MISSING`, `DEMO_ONLY`. Validation:
+            `Bad Request`. Upload limits: `LIMIT_FILE_SIZE`, `LIMIT_UNEXPECTED_FILE`,
+            `LIMIT_FILE_COUNT`, `LIMIT_FIELD_COUNT`. Fallbacks: `Not Found`,
+            `Internal Server Error`.
+          example: INVALID_MILESTONE_STATE
+        errorDescription:
+          type: string
+          description: Human-readable explanation, safe to show to the user.
+        details:
+          type: object
+          additionalProperties: true
+          description: Extra context for some codes, for example `status` and `allowed` for `INVALID_MILESTONE_STATE`.
+
+    PayPalError:
+      type: object
+      description: PayPal REST API error body, forwarded as received.
+      properties:
+        name:
+          type: string
+          example: UNPROCESSABLE_ENTITY
+        message:
+          type: string
+        debug_id:
+          type: string
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              issue:
+                type: string
+              description:
+                type: string
+              field:
+                type: string
+              location:
+                type: string
+        links:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+      additionalProperties: true
+
+    CreateProjectRequest:
+      type: object
+      required: [templateId]
+      additionalProperties: true
+      description: Unknown fields are ignored.
+      properties:
+        templateId:
+          type: string
+          pattern: "^[a-z][a-z0-9-]*$"
+          description: Id of a template from `GET /api/templates`.
+          example: renovation
+        title:
+          type: string
+          maxLength: 80
+          description: Trimmed. Defaults to the template's `defaultTitle` when absent or blank.
+        ownerName:
+          type: string
+          minLength: 1
+          maxLength: 60
+          default: Homeowner
+          description: Trimmed.
+        contractorName:
+          type: string
+          minLength: 1
+          maxLength: 60
+          default: Contractor
+          description: Trimmed.
+
+    CreatedProject:
+      type: object
+      required: [projectId, ownerToken, contractorToken]
+      properties:
+        projectId:
+          type: string
+          example: prj_0e7c870a8db34c3f
+        ownerToken:
+          type: string
+          description: Owner capability token. Shown once.
+          example: rJ1AU3dBjDLdxocUYb4yVqMMOuQwhGlL
+        contractorToken:
+          type: string
+          description: Contractor capability token. Shown once.
+          example: 0Ig77F7tn3W2c_lAxo1EGiJ_uzkkgPAc
+
+    ReasonRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 300
+          description: Trimmed before the length check. Recorded in the ledger.
+
+    RetryPayoutRequest:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          $ref: "#/components/schemas/PayoutKind"
+
+    AdvanceClockRequest:
+      type: object
+      required: [days]
+      properties:
+        days:
+          type: integer
+          minimum: 1
+          maximum: 60
+          description: Days to add to the project clock. Numeric strings are accepted.
+
+    TestCardRequest:
+      type: object
+      properties:
+        scenario:
+          type: string
+          enum: [approve, decline]
+          default: approve
+
+    MilestoneRef:
+      type: object
+      required: [projectId, milestoneId]
+      properties:
+        projectId:
+          type: string
+          minLength: 1
+          maxLength: 64
+        milestoneId:
+          type: string
+          minLength: 1
+          maxLength: 64
+
+    ProofUploadRequest:
+      type: object
+      required: [file]
+      properties:
+        file:
+          type: string
+          contentMediaType: application/octet-stream
+          description: |
+            One JPEG, PNG or PDF, max 8 MiB. The type is sniffed from the bytes, not taken
+            from the file name. Photo milestones (`proofType: photo`) refuse PDFs.
+        note:
+          type: string
+          maxLength: 500
+          description: Optional context for the reviewer. Instructions aimed at the AI are flagged (`instructions_in_note`).
+
+    ProofOutcome:
+      type: object
+      required: [proofId, decision, reason, status]
+      properties:
+        proofId:
+          type: string
+          example: prf_3f2a9c1d7e6b4a01
+        decision:
+          $ref: "#/components/schemas/ProofDecision"
+        reason:
+          type: string
+        status:
+          $ref: "#/components/schemas/MilestoneStatus"
+
+    WebhookEvent:
+      type: object
+      description: A PayPal webhook event, as sent by PayPal.
+      properties:
+        id:
+          type: string
+          example: WH-58D329510W468432D-8HN650336L201105X
+        event_type:
+          type: string
+          example: CUSTOMER.DISPUTE.CREATED
+        resource:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+
+    MilestoneStatus:
+      type: string
+      enum: [PLANNED, FUNDED, IN_REVIEW, RELEASED, CLOSED, CANCELLED]
+      description: |
+        - `PLANNED`: not funded yet.
+        - `FUNDED`: authorized; upfront settled; waiting for proof.
+        - `IN_REVIEW`: a proof needs the owner's decision.
+        - `RELEASED`: held part captured and paid; retention still held.
+        - `CLOSED`: fully settled (retention paid or refunded, or no retention).
+        - `CANCELLED`: cancelled; any authorization voided.
+
+    MilestoneAction:
+      type: string
+      enum:
+        - fund
+        - approve
+        - reject
+        - cancel
+        - reauthorize
+        - submitProof
+        - releaseRetention
+        - refundRetention
+        - openDispute
+        - submitEvidence
+        - resolveDispute
+        - retryUpfront
+        - retryPayout
+
+    ProofDecision:
+      type: string
+      enum: [release, review, reject]
+
+    PayoutKind:
+      type: string
+      enum: [supplier, contractor, retention]
+
+    RetentionStatus:
+      type: string
+      enum: [none, held, paid, refunded]
+
+    Money:
+      type: object
+      required: [value, display]
+      properties:
+        value:
+          type: string
+          pattern: "^\\d+\\.\\d{2}$"
+          description: Decimal amount in EUR, PayPal format.
+          example: "450.00"
+        display:
+          type: string
+          description: Formatted for display (en-IE).
+          example: "€450.00"
+
+    Template:
+      type: object
+      required:
+        [
+          id,
+          name,
+          description,
+          defaultTitle,
+          proofRole,
+          retention,
+          governance,
+          milestones,
+        ]
+      properties:
+        id:
+          type: string
+          pattern: "^[a-z][a-z0-9-]*$"
+          example: renovation
+        name:
+          type: string
+          example: Home renovation
+        description:
+          type: string
+        defaultTitle:
+          type: string
+          example: Bathroom renovation, Barcelona
+        proofRole:
+          type: string
+          description: Display name of the party that uploads proofs.
+          example: Contractor
+        retention:
+          type: object
+          required: [basisPoints, days]
+          properties:
+            basisPoints:
+              type: integer
+              minimum: 0
+              maximum: 2000
+              example: 500
+            days:
+              type: integer
+              minimum: 0
+              maximum: 365
+              example: 30
+        governance:
+          type: object
+          required: [autoReleaseMaxEur, minConfidence]
+          properties:
+            autoReleaseMaxEur:
+              type: integer
+              minimum: 0
+              description: Above this held amount, the AI can only send a proof to review.
+              example: 650
+            minConfidence:
+              type: number
+              minimum: 0.5
+              maximum: 1
+              example: 0.8
+        milestones:
+          type: array
+          minItems: 1
+          maxItems: 12
+          items:
+            $ref: "#/components/schemas/MilestoneTemplate"
+
+    MilestoneTemplate:
+      type: object
+      required: [title, durationDays, proofType, upfront, held, checklist]
+      properties:
+        title:
+          type: string
+          maxLength: 80
+        durationDays:
+          type: integer
+          minimum: 1
+          maximum: 90
+        proofType:
+          type: string
+          enum: [photo, document]
+        upfront:
+          $ref: "#/components/schemas/TemplatePart"
+        held:
+          $ref: "#/components/schemas/TemplatePart"
+        checklist:
+          type: array
+          minItems: 1
+          maxItems: 6
+          items:
+            type: string
+            maxLength: 160
+
+    TemplatePart:
+      type: object
+      required: [label, eur]
+      properties:
+        label:
+          type: string
+          maxLength: 60
+        eur:
+          type: integer
+          minimum: 0
+          description: Whole euros. Upfront + held is at most 2,000 per milestone.
+
+    ProjectView:
+      type: object
+      required:
+        [
+          id,
+          title,
+          templateId,
+          role,
+          ownerName,
+          contractorName,
+          today,
+          demoMode,
+          governance,
+          totals,
+          milestones,
+          ledger,
+        ]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        templateId:
+          type: string
+        role:
+          type: string
+          enum: [owner, contractor]
+          description: The role of the token used for this request.
+        ownerName:
+          type: string
+        contractorName:
+          type: string
+        today:
+          type: string
+          format: date
+          description: The project's current date (includes any demo clock offset).
+        demoMode:
+          type: boolean
+        governance:
+          type: object
+          required:
+            [autoReleaseMax, minConfidence, retentionPercent, retentionDays]
+          properties:
+            autoReleaseMax:
+              $ref: "#/components/schemas/Money"
+            minConfidence:
+              type: number
+            retentionPercent:
+              type: number
+              example: 5
+            retentionDays:
+              type: integer
+              example: 30
+        totals:
+          type: object
+          required: [total, upfrontPaid, released, held, retention, fees]
+          properties:
+            total:
+              $ref: "#/components/schemas/Money"
+            upfrontPaid:
+              $ref: "#/components/schemas/Money"
+            released:
+              $ref: "#/components/schemas/Money"
+            held:
+              $ref: "#/components/schemas/Money"
+            retention:
+              $ref: "#/components/schemas/Money"
+            fees:
+              $ref: "#/components/schemas/Money"
+        milestones:
+          type: array
+          items:
+            $ref: "#/components/schemas/Milestone"
+        ledger:
+          type: object
+          required: [integrity, entries]
+          properties:
+            integrity:
+              $ref: "#/components/schemas/LedgerIntegrity"
+            entries:
+              type: array
+              description: Newest first.
+              items:
+                $ref: "#/components/schemas/LedgerEntry"
+
+    Milestone:
+      type: object
+      required:
+        [
+          id,
+          seq,
+          title,
+          checklist,
+          proofType,
+          status,
+          amount,
+          upfront,
+          held,
+          schedule,
+          authorization,
+          paypal,
+          retention,
+          dispute,
+          proofs,
+          payouts,
+          actions,
+        ]
+      properties:
+        id:
+          type: string
+          example: ms_f8f80c4d1d7549c4
+        seq:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+        checklist:
+          type: array
+          items:
+            type: string
+        proofType:
+          type: string
+          enum: [photo, document]
+        status:
+          $ref: "#/components/schemas/MilestoneStatus"
+        amount:
+          $ref: "#/components/schemas/Money"
+        upfront:
+          allOf:
+            - $ref: "#/components/schemas/Money"
+            - type: object
+              required: [label, paid]
+              properties:
+                label:
+                  type: string
+                paid:
+                  type: boolean
+                  description: The upfront part has been captured.
+        held:
+          allOf:
+            - $ref: "#/components/schemas/Money"
+            - type: object
+              required: [label, released]
+              properties:
+                label:
+                  type: string
+                released:
+                  type: boolean
+                  description: The held part has been captured.
+        schedule:
+          type: object
+          required:
+            [plannedStart, plannedEnd, forecastStart, forecastEnd, slipDays]
+          properties:
+            plannedStart:
+              type: string
+              format: date
+            plannedEnd:
+              type: string
+              format: date
+            forecastStart:
+              type: string
+              format: date
+            forecastEnd:
+              type: string
+              format: date
+            slipDays:
+              type: integer
+              description: forecastEnd minus plannedEnd, in days (negative = ahead of plan).
+        authorization:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [id, expiresAt, daysLeft]
+              properties:
+                id:
+                  type: string
+                  description: PayPal authorization id.
+                expiresAt:
+                  type: [string, "null"]
+                  format: date-time
+                daysLeft:
+                  type: [integer, "null"]
+                  minimum: 0
+        paypal:
+          type: object
+          required: [orderId, upfrontCaptureId, heldCaptureId, fees]
+          properties:
+            orderId:
+              type: [string, "null"]
+            upfrontCaptureId:
+              type: [string, "null"]
+            heldCaptureId:
+              type: [string, "null"]
+            fees:
+              $ref: "#/components/schemas/Money"
+        retention:
+          allOf:
+            - $ref: "#/components/schemas/Money"
+            - type: object
+              required: [status, releaseAt]
+              properties:
+                status:
+                  $ref: "#/components/schemas/RetentionStatus"
+                releaseAt:
+                  type: [string, "null"]
+                  format: date
+        dispute:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [id, status, simulated]
+              properties:
+                id:
+                  type: string
+                status:
+                  type: [string, "null"]
+                  description: PayPal dispute status, e.g. `WAITING_FOR_SELLER_RESPONSE`, `UNDER_REVIEW`, `RESOLVED`.
+                simulated:
+                  type: boolean
+                  description: A demo dispute (`PP-D-DEMO-` id), never sent to PayPal.
+        proofs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Proof"
+        payouts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Payout"
+        actions:
+          type: array
+          description: What the caller's role may do on this milestone right now.
+          items:
+            $ref: "#/components/schemas/MilestoneAction"
+
+    Proof:
+      type: object
+      required:
+        [
+          id,
+          fileName,
+          mimeType,
+          sizeBytes,
+          sha256,
+          note,
+          exif,
+          flags,
+          verdict,
+          decision,
+          decisionReason,
+          createdAt,
+        ]
+      properties:
+        id:
+          type: string
+        milestoneId:
+          type: string
+          description: Present in the evidence pack only.
+        fileName:
+          type: string
+          maxLength: 120
+        mimeType:
+          type: string
+          enum:
+            [image/jpeg, image/png, application/pdf, application/octet-stream]
+        sizeBytes:
+          type: integer
+        sha256:
+          type: string
+        note:
+          type: [string, "null"]
+        exif:
+          type: object
+          properties:
+            takenAt:
+              type: [string, "null"]
+              format: date-time
+            latitude:
+              type: [number, "null"]
+            longitude:
+              type: [number, "null"]
+            distanceMeters:
+              type: [number, "null"]
+              description: Distance from the project site.
+            software:
+              type: [string, "null"]
+        flags:
+          type: object
+          required: [hard, soft]
+          properties:
+            hard:
+              type: array
+              items:
+                type: string
+                enum:
+                  [
+                    file_too_large,
+                    unsupported_file_type,
+                    photo_required,
+                    duplicate_proof,
+                    instructions_in_note,
+                    taken_away_from_site,
+                  ]
+            soft:
+              type: array
+              items:
+                type: string
+                enum:
+                  [
+                    edited_with_software,
+                    taken_outside_milestone_window,
+                    no_capture_date,
+                    no_location,
+                  ]
+        verdict:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/Verdict"
+        decision:
+          $ref: "#/components/schemas/ProofDecision"
+        decisionReason:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    Verdict:
+      type: object
+      description: The AI verifier's answer. `null` when the AI was skipped (hard flag) or unavailable.
+      required: [met, confidence, reasons, concerns]
+      properties:
+        met:
+          type: boolean
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        reasons:
+          type: array
+          maxItems: 8
+          items:
+            type: string
+            maxLength: 300
+        concerns:
+          type: array
+          maxItems: 8
+          items:
+            type: string
+            maxLength: 300
+
+    Payout:
+      allOf:
+        - $ref: "#/components/schemas/Money"
+        - type: object
+          required: [kind, batchId, status, createdAt]
+          properties:
+            kind:
+              $ref: "#/components/schemas/PayoutKind"
+            batchId:
+              type: [string, "null"]
+              description: PayPal `payout_batch_id`.
+            status:
+              type: string
+              description: PayPal batch status (e.g. `PENDING`, `SUCCESS`), updated by webhooks, or `FAILED` when the call failed.
+            createdAt:
+              type: string
+              format: date-time
+
+    LedgerEntry:
+      type: object
+      required:
+        [
+          seq,
+          projectId,
+          milestoneId,
+          actor,
+          action,
+          amountCents,
+          paypalRef,
+          detail,
+          createdAt,
+          prevHash,
+          hash,
+        ]
+      properties:
+        seq:
+          type: integer
+        projectId:
+          type: string
+        milestoneId:
+          type: [string, "null"]
+        actor:
+          type: string
+          enum: [owner, contractor, ai, paypal, system]
+        action:
+          type: string
+          description: |
+            e.g. `project_created`, `order_created`, `funds_authorized`, `funding_declined`,
+            `upfront_captured`, `payout_sent`, `payout_failed`, `proof_submitted`, `ai_verdict`,
+            `policy_decision`, `held_released`, `schedule_shifted`, `proof_rejected`,
+            `milestone_cancelled`, `funds_reauthorized`, `retention_refunded`,
+            `dispute_opened`, `dispute_updated`, `dispute_evidence_submitted`,
+            `dispute_resolved`, `payout_status`, `paypal_event`, `demo_clock_advanced`.
+        amountCents:
+          type: [integer, "null"]
+        paypalRef:
+          type: [string, "null"]
+        detail:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        prevHash:
+          type: string
+          description: Hash of the previous entry (64 zeros for the first).
+        hash:
+          type: string
+          description: SHA-256 over the previous hash and this entry's fields.
+
+    LedgerIntegrity:
+      oneOf:
+        - type: object
+          required: [valid, entries, headHash]
+          properties:
+            valid:
+              const: true
+            entries:
+              type: integer
+            headHash:
+              type: string
+        - type: object
+          required: [valid, entries, brokenAtSeq]
+          properties:
+            valid:
+              const: false
+            entries:
+              type: integer
+            brokenAtSeq:
+              type: integer
+              description: First entry whose hash chain does not verify.
+
+    EvidencePack:
+      type: object
+      required:
+        [generatedAt, project, milestone, proofs, ledger, ledgerIntegrity]
+      properties:
+        generatedAt:
+          type: string
+          format: date-time
+        project:
+          type: object
+          required: [id, title, contractor]
+          properties:
+            id:
+              type: string
+            title:
+              type: string
+            contractor:
+              type: string
+        milestone:
+          type: object
+          required: [id, title, checklist, amount, status, paypal]
+          properties:
+            id:
+              type: string
+            title:
+              type: string
+            checklist:
+              type: array
+              items:
+                type: string
+            amount:
+              type: string
+              description: Formatted total, e.g. `€600.00`.
+            status:
+              $ref: "#/components/schemas/MilestoneStatus"
+            paypal:
+              type: object
+              required:
+                [
+                  orderId,
+                  authorizationId,
+                  upfrontCaptureId,
+                  heldCaptureId,
+                  disputeId,
+                ]
+              properties:
+                orderId:
+                  type: [string, "null"]
+                authorizationId:
+                  type: [string, "null"]
+                upfrontCaptureId:
+                  type: [string, "null"]
+                heldCaptureId:
+                  type: [string, "null"]
+                disputeId:
+                  type: [string, "null"]
+        proofs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Proof"
+        ledger:
+          type: array
+          description: This milestone's entries, oldest first.
+          items:
+            $ref: "#/components/schemas/LedgerEntry"
+        ledgerIntegrity:
+          $ref: "#/components/schemas/LedgerIntegrity"
