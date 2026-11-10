@@ -14,6 +14,8 @@ export type PolicyInput = {
   heldCents: number;
   autoReleaseMaxCents: number;
   disputeOpen: boolean;
+  /** An extra agreed during the work: always signed off by a person. */
+  extra?: boolean;
 };
 
 export type PolicyDecision =
@@ -85,6 +87,13 @@ export function decideRelease(input: PolicyInput): PolicyDecision {
     return {
       decision: "review",
       reason: `The AI found the checklist met, but a person must decide: ${describeFlags(input.softFlags)}.`,
+    };
+  }
+  if (input.extra) {
+    return {
+      decision: "review",
+      reason:
+        "The proof passed, but an agreed extra is always signed off by the homeowner.",
     };
   }
   if (input.heldCents > input.autoReleaseMaxCents) {

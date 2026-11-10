@@ -97,7 +97,8 @@ export function otherParty(party: Party): Party {
   return party === "owner" ? "contractor" : "owner";
 }
 
-export type ChangeOrderStatus = "proposed" | "accepted" | "declined";
+export type ChangeOrderStatus =
+  "proposed" | "accepted" | "declined" | "withdrawn" | "cancelled";
 
 /** Work asked for outside the plan, agreed (or not) by both parties. */
 export type ChangeOrder = {
@@ -381,6 +382,28 @@ export function decideChangeOrderRow(
          WHERE id = @id AND status = 'proposed'`,
       )
       .run({ ...decision, id: changeOrderId }).changes === 1
+  );
+}
+
+/** The change order an agreed extra's milestone came from, if any. */
+export function getChangeOrderByMilestone(
+  db: Db,
+  milestoneId: string,
+): ChangeOrder | undefined {
+  const row = db
+    .prepare("SELECT * FROM change_orders WHERE milestone_id = ?")
+    .get(milestoneId) as Row | undefined;
+  return row ? fromRow<ChangeOrder>(row, CHANGE_ORDER_COLUMNS) : undefined;
+}
+
+/** An agreed extra whose milestone was cancelled is cancelled too. */
+export function cancelChangeOrderRow(db: Db, changeOrderId: string): boolean {
+  return (
+    db
+      .prepare(
+        "UPDATE change_orders SET status = 'cancelled' WHERE id = ? AND status = 'accepted'",
+      )
+      .run(changeOrderId).changes === 1
   );
 }
 

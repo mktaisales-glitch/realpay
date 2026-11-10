@@ -7,7 +7,9 @@ import {
   listPayouts,
   listProofs,
   otherParty,
+  type ChangeOrder,
   type Milestone,
+  type Party,
   type Project,
 } from "../db/repository.ts";
 import { DomainError } from "./domainError.ts";
@@ -326,19 +328,24 @@ export function buildProjectView(
         price: amount(changeOrder.priceCents),
         requestedBy: changeOrder.requestedBy,
         proposedBy: changeOrder.proposedBy,
-        // Only the other party decides, so a decision names them.
-        decidedBy:
-          changeOrder.status === "proposed"
-            ? null
-            : otherParty(changeOrder.proposedBy),
+        // Only the other party decides, so a decision names them; the
+        // proposer withdraws, and a cancelled milestone cancels the extra.
+        decidedBy: decidedBy(changeOrder),
         status: changeOrder.status,
         milestone: milestone
-          ? { id: milestone.id, seq: milestone.seq, title: milestone.title }
+          ? {
+              id: milestone.id,
+              seq: milestone.seq,
+              title: milestone.title,
+              status: milestone.status,
+            }
           : null,
         createdAt: changeOrder.createdAt,
         decidedAt: changeOrder.decidedAt,
         canDecide:
           changeOrder.status === "proposed" && changeOrder.proposedBy !== role,
+        canWithdraw:
+          changeOrder.status === "proposed" && changeOrder.proposedBy === role,
       };
     }),
     ledger: {
@@ -356,4 +363,10 @@ export function requireProjectRecord(db: Db, projectId: string): Project {
     throw new DomainError(404, "PROJECT_NOT_FOUND", "No project with that id.");
   }
   return project;
+}
+
+function decidedBy(changeOrder: ChangeOrder): Party | null {
+  if (changeOrder.status === "proposed") return null;
+  if (changeOrder.status === "withdrawn") return changeOrder.proposedBy;
+  return otherParty(changeOrder.proposedBy);
 }

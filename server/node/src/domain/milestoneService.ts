@@ -17,11 +17,13 @@ import type { Db } from "../db/database.ts";
 import {
   countAiVerdictsSince,
   countProofs,
+  cancelChangeOrderRow,
   decideChangeOrderRow,
   findMilestoneByPayPalRef,
   findPayoutByBatch,
   getMilestone,
   getChangeOrder,
+  getChangeOrderByMilestone,
   getMilestoneById,
   getPayout,
   getProject,
@@ -52,7 +54,10 @@ import type {
   PaymentsGateway,
 } from "../paypal/paymentsGateway.ts";
 import type { ProofVerifier } from "../verification/aiVerifier.ts";
-import { runPrechecks } from "../verification/prechecks.ts";
+import {
+  looksLikePromptInjection,
+  runPrechecks,
+} from "../verification/prechecks.ts";
 import { DomainError } from "./domainError.ts";
 import { formatEuro, percentOf } from "./money.ts";
 import {
@@ -148,7 +153,13 @@ export type ChangeOrderInput = {
  */
 export const MAX_CHANGE_ORDER_CENTS = MAX_MILESTONE_EUR * 100;
 export const MAX_CHANGE_ORDER_DESCRIPTION_LENGTH = 280;
-export const MAX_CHANGE_ORDERS_PER_PROJECT = 20;
+/** A priced extra under €10 costs more in PayPal fees than it is worth. */
+export const MIN_CHANGE_ORDER_CENTS = 1000;
+/** Open (proposed) at once, and ever, per project. */
+export const MAX_OPEN_CHANGE_ORDERS_PER_PROJECT = 20;
+export const MAX_CHANGE_ORDERS_PER_PROJECT = 50;
+/** Agreed extras can add at most half of the original contract value. */
+export const MAX_EXTRAS_PERCENT = 50;
 export const CHANGE_ORDER_DURATION_DAYS = 3;
 const CHANGE_ORDER_TITLE_LENGTH = 60;
 
@@ -255,6 +266,35 @@ function requireNoOpenDispute(milestone: Milestone) {
       409,
       "DISPUTE_OPEN",
       "A PayPal dispute is open on this milestone, so its money is frozen.",
+    );
+  }
+}
+
+function alreadyDecided(changeOrder: ChangeOrder | undefined) {
+  const status = changeOrder?.status ?? "decided";
+  return new DomainError(
+    409,
+    "CHANGE_ORDER_ALREADY_DECIDED",
+    `This change order was already ${status}.`,
+    { status },
+  );
+}
+
+function requireStillProposed(changeOrder: ChangeOrder) {
+  if (changeOrder.status !== "proposed") throw alreadyDecided(changeOrder);
+}
+
+function requireNoOpenDisputeInProject(milestones: Milestone[]) {
+  if (
+    milestones.some(
+      (milestone) =>
+        milestone.disputeId && milestone.disputeStatus !== "RESOLVED",
+    )
+  ) {
+    throw new DomainError(
+      409,
+      "DISPUTE_OPEN",
+      "A PayPal dispute is open on this project. Extras wait until it is resolved.",
     );
   }
 }
@@ -763,9 +803,10 @@ export function createMilestoneService(deps: ServiceDependencies) {
     input: ChangeOrderInput,
   ): ChangeOrder {
     const project = requireProject(projectId);
-    // One line, no quote fences: an accepted extra's description becomes
-    // the checklist the AI inspector reads.
+    // One line, no invisible format characters, no quote fences: an accepted
+    // extra's description becomes the checklist the AI inspector reads.
     const description = input.description
+      .replaceAll(/\p{Cf}/gu, "")
       .replaceAll(/[\p{Cc}\s]+/gu, " ")
       .replaceAll('"""', "")
       .trim();
@@ -791,14 +832,42 @@ export function createMilestoneService(deps: ServiceDependencies) {
         { maxCents: MAX_CHANGE_ORDER_CENTS },
       );
     }
+    if (input.priceCents !== 0 && input.priceCents < MIN_CHANGE_ORDER_CENTS) {
+      throw new DomainError(
+        400,
+        "CHANGE_ORDER_TOO_SMALL",
+        `A priced extra costs at least ${formatEuro(MIN_CHANGE_ORDER_CENTS)}. Use ${formatEuro(0)} to record a free change.`,
+        { minCents: MIN_CHANGE_ORDER_CENTS },
+      );
+    }
+    if (looksLikePromptInjection(description)) {
+      throw new DomainError(
+        400,
+        "CHANGE_ORDER_LOOKS_LIKE_INSTRUCTIONS",
+        "Describe the work itself. The description becomes the AI inspector's checklist, so it cannot contain instructions.",
+      );
+    }
+    const milestones = listMilestones(db, project.id);
+    requireNoOpenDisputeInProject(milestones);
     const existing = listChangeOrders(db, project.id);
+    const open = existing.filter((item) => item.status === "proposed");
+    if (open.length >= MAX_OPEN_CHANGE_ORDERS_PER_PROJECT) {
+      throw new DomainError(
+        409,
+        "TOO_MANY_OPEN_CHANGE_ORDERS",
+        `At most ${MAX_OPEN_CHANGE_ORDERS_PER_PROJECT} extras can wait for an answer at once.`,
+        { max: MAX_OPEN_CHANGE_ORDERS_PER_PROJECT },
+      );
+    }
     if (existing.length >= MAX_CHANGE_ORDERS_PER_PROJECT) {
       throw new DomainError(
         409,
         "TOO_MANY_CHANGE_ORDERS",
         `A project can record at most ${MAX_CHANGE_ORDERS_PER_PROJECT} change orders.`,
+        { max: MAX_CHANGE_ORDERS_PER_PROJECT },
       );
     }
+    requireWithinExtrasLimit(milestones, existing, input.priceCents);
     const changeOrder: ChangeOrder = {
       id: newId("co"),
       projectId: project.id,
@@ -827,15 +896,52 @@ export function createMilestoneService(deps: ServiceDependencies) {
     return changeOrder;
   }
 
+  function requireChangeOrder(project: Project, changeOrderId: string) {
+    const changeOrder = getChangeOrder(db, project.id, changeOrderId);
+    if (!changeOrder) {
+      throw new DomainError(
+        404,
+        "CHANGE_ORDER_NOT_FOUND",
+        "No change order with that id in this project.",
+      );
+    }
+    return changeOrder;
+  }
+
+  /**
+   * Agreed extras (cancelled ones aside) plus this one stay within half of
+   * the original contract, i.e. the milestones that did not come from an extra.
+   */
+  function requireWithinExtrasLimit(
+    milestones: Milestone[],
+    changeOrders: ChangeOrder[],
+    priceCents: number,
+  ) {
+    const fromExtras = new Set(changeOrders.map((item) => item.milestoneId));
+    const contractCents = milestones
+      .filter((milestone) => !fromExtras.has(milestone.id))
+      .reduce((sum, m) => sum + m.upfrontCents + m.heldCents, 0);
+    const agreedCents = changeOrders
+      .filter((item) => item.status === "accepted")
+      .reduce((sum, item) => sum + item.priceCents, 0);
+    const limitCents = Math.floor((contractCents * MAX_EXTRAS_PERCENT) / 100);
+    if (agreedCents + priceCents > limitCents) {
+      throw new DomainError(
+        409,
+        "EXTRAS_OVER_LIMIT",
+        `Agreed extras can add at most ${MAX_EXTRAS_PERCENT}% of the original contract (${formatEuro(limitCents)}). ${formatEuro(agreedCents)} is already agreed.`,
+        { limitCents, agreedCents },
+      );
+    }
+  }
+
   /** The milestone an accepted, paid extra turns into: last in the plan. */
   function extraMilestone(project: Project, changeOrder: ChangeOrder) {
     const milestones = listMilestones(db, project.id);
     const last = milestones.at(-1);
-    // ISO dates compare as strings: start the day after the last milestone, never in the past.
-    let start = projectToday(project);
-    if (last && addDays(last.forecastEnd, 1) > start) {
-      start = addDays(last.forecastEnd, 1);
-    }
+    // The work was agreed today, so its window starts today: proof dated
+    // after the last planned milestone would otherwise be "outside the dates".
+    const start = projectToday(project);
     const [window] = planSequential(start, [CHANGE_ORDER_DURATION_DAYS]) as [
       { start: string; end: string },
     ];
@@ -889,19 +995,22 @@ export function createMilestoneService(deps: ServiceDependencies) {
     decision: "accept" | "decline",
   ): ChangeOrder {
     const project = requireProject(projectId);
-    const changeOrder = getChangeOrder(db, project.id, changeOrderId);
-    if (!changeOrder) {
-      throw new DomainError(
-        404,
-        "CHANGE_ORDER_NOT_FOUND",
-        "No change order with that id in this project.",
-      );
-    }
+    const changeOrder = requireChangeOrder(project, changeOrderId);
     if (changeOrder.proposedBy === role) {
       throw new DomainError(
         403,
         "CANNOT_DECIDE_OWN_CHANGE_ORDER",
         `You proposed this extra, so only the ${otherParty(role)} can ${decision} it.`,
+      );
+    }
+    requireStillProposed(changeOrder);
+    if (decision === "accept") {
+      const milestones = listMilestones(db, project.id);
+      requireNoOpenDisputeInProject(milestones);
+      requireWithinExtrasLimit(
+        milestones,
+        listChangeOrders(db, project.id),
+        changeOrder.priceCents,
       );
     }
     const decidedAt = projectNow(project).toISOString();
@@ -918,12 +1027,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
         decidedAt,
       });
       if (!recorded) {
-        throw new DomainError(
-          409,
-          "CHANGE_ORDER_ALREADY_DECIDED",
-          `This change order was already ${changeOrder.status === "proposed" ? "decided" : changeOrder.status}.`,
-          { status: changeOrder.status },
-        );
+        throw alreadyDecided(getChangeOrder(db, project.id, changeOrder.id));
       }
       ledger(
         project,
@@ -942,6 +1046,39 @@ export function createMilestoneService(deps: ServiceDependencies) {
           },
         },
       );
+    })();
+    return getChangeOrder(db, project.id, changeOrder.id) ?? changeOrder;
+  }
+
+  /** The proposer takes back an extra nobody has answered yet. */
+  function withdrawChangeOrder(
+    projectId: string,
+    changeOrderId: string,
+    role: Party,
+  ): ChangeOrder {
+    const project = requireProject(projectId);
+    const changeOrder = requireChangeOrder(project, changeOrderId);
+    if (changeOrder.proposedBy !== role) {
+      throw new DomainError(
+        403,
+        "ONLY_PROPOSER_CAN_WITHDRAW",
+        `Only the ${changeOrder.proposedBy} who proposed this extra can withdraw it. You can decline it.`,
+      );
+    }
+    requireStillProposed(changeOrder);
+    db.transaction(() => {
+      const recorded = decideChangeOrderRow(db, changeOrder.id, {
+        status: "withdrawn",
+        milestoneId: null,
+        decidedAt: projectNow(project).toISOString(),
+      });
+      if (!recorded) {
+        throw alreadyDecided(getChangeOrder(db, project.id, changeOrder.id));
+      }
+      ledger(project, null, role, "change_order_withdrawn", {
+        amountCents: changeOrder.priceCents,
+        detail: { changeOrderId: changeOrder.id, seq: changeOrder.seq },
+      });
     })();
     return getChangeOrder(db, project.id, changeOrder.id) ?? changeOrder;
   }
@@ -1109,16 +1246,26 @@ export function createMilestoneService(deps: ServiceDependencies) {
           `${milestone.authorizationId}:void`,
         );
       }
-      updateMilestone(db, milestone.id, { status: "CANCELLED" });
-      ledger(project, milestone, "owner", "milestone_cancelled", {
-        amountCents: milestone.authorizationId ? milestone.heldCents : 0,
-        paypalRef: milestone.authorizationId,
-        detail: {
-          voided,
-          holdExpired: expired,
-          upfrontKeptBySupplier: Boolean(milestone.upfrontCaptureId),
-        },
-      });
+      db.transaction(() => {
+        updateMilestone(db, milestone.id, { status: "CANCELLED" });
+        ledger(project, milestone, "owner", "milestone_cancelled", {
+          amountCents: milestone.authorizationId ? milestone.heldCents : 0,
+          paypalRef: milestone.authorizationId,
+          detail: {
+            voided,
+            holdExpired: expired,
+            upfrontKeptBySupplier: Boolean(milestone.upfrontCaptureId),
+          },
+        });
+        // An agreed extra lives and dies with its milestone.
+        const changeOrder = getChangeOrderByMilestone(db, milestone.id);
+        if (changeOrder && cancelChangeOrderRow(db, changeOrder.id)) {
+          ledger(project, milestone, "owner", "change_order_cancelled", {
+            amountCents: changeOrder.priceCents,
+            detail: { changeOrderId: changeOrder.id, seq: changeOrder.seq },
+          });
+        }
+      })();
       return reload(milestone);
     });
   }
@@ -1134,6 +1281,8 @@ export function createMilestoneService(deps: ServiceDependencies) {
     return withLock(milestone.id, async () => {
       requireStatus(milestone, ["FUNDED", "IN_REVIEW"], "submit proof for");
       requireLiveHold(project, milestone);
+      // An agreed extra's checklist was written by a party, not by us.
+      const isExtra = Boolean(getChangeOrderByMilestone(db, milestone.id));
       if (countProofs(db, milestone.id) >= MAX_PROOFS_PER_MILESTONE) {
         throw new DomainError(
           409,
@@ -1197,6 +1346,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
           checklist: milestone.checklist,
           proofType: milestone.proofType,
           note: upload.note,
+          checklistFromChangeOrder: isExtra,
           file: {
             mimeType: checks.mimeType,
             bytes: upload.bytes,
@@ -1229,6 +1379,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
         disputeOpen: Boolean(
           current.disputeId && current.disputeStatus !== "RESOLVED",
         ),
+        extra: isExtra,
       });
 
       insertProof(db, {
@@ -1305,7 +1456,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
     });
   }
 
-  /* ---------- retention (snagging) ---------- */
+  /* ---------- retention (final fixes) ---------- */
 
   async function releaseRetention(projectId: string, milestoneId: string) {
     const { project, milestone } = requireMilestone(projectId, milestoneId);
@@ -1823,6 +1974,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
     advanceClock,
     proposeChangeOrder,
     decideChangeOrder,
+    withdrawChangeOrder,
     createFundingOrder,
     authorizeFundingOrder,
     fundWithCard,

@@ -45,15 +45,17 @@ const changeOrderParamsSchema = z.object({
   projectId: z.string().min(1).max(64),
   changeOrderId: z.string().min(1).max(64),
 });
-const changeOrderSchema = z.object({
-  description: z
-    .string()
-    .trim()
-    .min(3)
-    .max(MAX_CHANGE_ORDER_DESCRIPTION_LENGTH),
-  priceCents: z.number().int().min(0).max(MAX_CHANGE_ORDER_CENTS),
-  requestedBy: z.enum(["owner", "contractor"]).optional(),
-});
+const changeOrderSchema = z
+  .object({
+    description: z
+      .string()
+      .trim()
+      .min(3)
+      .max(MAX_CHANGE_ORDER_DESCRIPTION_LENGTH),
+    priceCents: z.number().int().min(0).max(MAX_CHANGE_ORDER_CENTS),
+    requestedBy: z.enum(["owner", "contractor"]).optional(),
+  })
+  .strict();
 
 const reasonSchema = z.object({ reason: z.string().trim().min(3).max(300) });
 const proofBodySchema = z.object({
@@ -303,6 +305,22 @@ export function createProjectRouter({
     sendView(request, response);
   }
 
+  /** The proposer takes back an extra before it is answered. */
+  function withdrawChangeOrderRouteHandler(
+    request: Request,
+    response: Response,
+  ) {
+    const { projectId, changeOrderId } = changeOrderParamsSchema.parse(
+      request.params,
+    );
+    service.withdrawChangeOrder(
+      projectId,
+      changeOrderId,
+      request.realpay!.role,
+    );
+    sendView(request, response);
+  }
+
   /* ---------- demo-only controls (DEMO_MODE=true) ---------- */
 
   /**
@@ -394,6 +412,12 @@ export function createProjectRouter({
     anyone,
     changeOrderLimiter,
     declineChangeOrderRouteHandler,
+  );
+  router.post(
+    `${co}/:changeOrderId/withdraw`,
+    anyone,
+    changeOrderLimiter,
+    withdrawChangeOrderRouteHandler,
   );
   router.post(`${ms}/dispute/evidence`, anyone, submitEvidenceRouteHandler);
 

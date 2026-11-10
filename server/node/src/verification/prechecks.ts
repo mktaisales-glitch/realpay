@@ -81,7 +81,7 @@ export function distanceInMeters(
 
 // Phrases that try to talk to the inspector instead of describing the work.
 const INSTRUCTION_PATTERN =
-  /\b(ignore (all|previous|the above)|system prompt|you are now|approve (this|the payment)|set (met|confidence)|return \{)/i;
+  /\b(ignore (all|previous|the above)|system prompt|you are now|approve (this|the payment)|(always|just|automatically) (approve|release|pay)|set (met|confidence)|return \{)/i;
 
 export function looksLikePromptInjection(text: string | undefined): boolean {
   return Boolean(text && INSTRUCTION_PATTERN.test(text));

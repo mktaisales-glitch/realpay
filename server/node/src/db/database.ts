@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS change_orders (
   proposed_by TEXT NOT NULL CHECK (proposed_by IN ('owner', 'contractor')),
   description TEXT NOT NULL,
   price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
-  status TEXT NOT NULL CHECK (status IN ('proposed', 'accepted', 'declined')),
+  status TEXT NOT NULL CHECK (status IN ('proposed', 'accepted', 'declined', 'withdrawn', 'cancelled')),
   milestone_id TEXT REFERENCES milestones(id),
   created_at TEXT NOT NULL,
   decided_at TEXT,
@@ -157,5 +157,29 @@ export function openDatabase(filePath: string): Db {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA);
+  widenChangeOrderStatuses(db);
   return db;
+}
+
+/**
+ * Databases made before change orders could be withdrawn or cancelled have
+ * the old CHECK constraint; SQLite cannot alter it, so the table is rebuilt.
+ */
+function widenChangeOrderStatuses(db: Db) {
+  const table = db
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'change_orders'",
+    )
+    .get() as { sql: string } | undefined;
+  if (!table || table.sql.includes("'cancelled'")) return;
+  const create =
+    /CREATE TABLE IF NOT EXISTS change_orders \([\s\S]*?\n\);/.exec(SCHEMA)![0];
+  db.pragma("foreign_keys = OFF");
+  db.transaction(() => {
+    db.exec("ALTER TABLE change_orders RENAME TO change_orders_old");
+    db.exec(create);
+    db.exec("INSERT INTO change_orders SELECT * FROM change_orders_old");
+    db.exec("DROP TABLE change_orders_old");
+  })();
+  db.pragma("foreign_keys = ON");
 }
