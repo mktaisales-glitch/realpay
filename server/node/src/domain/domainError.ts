@@ -4,13 +4,20 @@
  * ###################################################################### */
 
 export class DomainError extends Error {
+  readonly statusCode: number;
+  readonly code: string;
+  readonly details?: Record<string, unknown>;
+
   constructor(
-    readonly statusCode: number,
-    readonly code: string,
+    statusCode: number,
+    code: string,
     message: string,
-    readonly details?: Record<string, unknown>,
+    details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "DomainError";
+    this.statusCode = statusCode;
+    this.code = code;
+    if (details !== undefined) this.details = details;
   }
 }

@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Lint, typecheck and test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20.x, 24.x]
+    defaults:
+      run:
+        working-directory: server/node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: server/node/package-lock.json
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm test
+
+  docker:
+    name: Docker image builds and answers /healthz
+    runs-on: ubuntu-latest
+    needs: server
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t realpay:ci .
+      - name: Start with placeholder sandbox settings
+        run: |
+          docker run -d --name realpay -p 8080:8080 \
+            -e PAYPAL_SANDBOX_CLIENT_ID=ci -e PAYPAL_SANDBOX_CLIENT_SECRET=ci \
+            -e SUPPLIER_EMAIL=supplier@example.com -e CONTRACTOR_EMAIL=contractor@example.com \
+            realpay:ci
+          for attempt in $(seq 1 20); do
+            curl -fsS http://localhost:8080/healthz && exit 0
+            sleep 1
+          done
+          docker logs realpay
+          exit 1

@@ -15,13 +15,14 @@ export interface VisionProvider {
 }
 
 export class ProviderError extends Error {
-  constructor(
-    readonly provider: string,
-    readonly statusCode: number,
-    message: string,
-  ) {
+  readonly provider: string;
+  readonly statusCode: number;
+
+  constructor(provider: string, statusCode: number, message: string) {
     super(message);
     this.name = "ProviderError";
+    this.provider = provider;
+    this.statusCode = statusCode;
   }
 }
 

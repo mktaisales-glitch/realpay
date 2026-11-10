@@ -1,0 +1,14 @@
+**/node_modules
+**/data
+**/*.db
+**/*.db-*
+**/coverage
+**/*.test.ts
+server/node/src/testUtils.ts
+.env
+.env.*
+!.env.sample
+.git
+.github
+docs
+demo

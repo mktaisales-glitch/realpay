@@ -17,8 +17,7 @@
     "test:watch": "vitest",
     "start": "dotenvx run -f ../../.env --quiet -- tsx src/server.ts",
     "dev": "dotenvx run -f ../../.env --quiet -- tsx --watch src/server.ts",
-    "start:prod": "node --import tsx src/server.ts",
-    "seed": "dotenvx run -f ../../.env --quiet -- tsx scripts/seedDemo.ts",
+    "start:prod": "node src/server.ts",
     "lint:client": "cd ../.. && eslint -c server/node/eslint.client.config.mjs client"
   },
   "dependencies": {
