@@ -1276,6 +1276,227 @@
           "response": []
         }
       ]
+    },
+    {
+      "name": "7. Change orders (extras)",
+      "description": "Work outside the plan or an accepted change order cannot be paid. Either party proposes an extra; only the other party can accept or decline it. An accepted, priced extra becomes a new PLANNED milestone at the end of the plan.",
+      "item": [
+        {
+          "name": "Contractor proposes an extra the owner asked for",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                  "const co = pm.response.json().changeOrders.at(-1);",
+                  "pm.test('Recorded as proposed by the contractor, asked for by the owner', () => {",
+                  "    pm.expect(co.status).to.eql('proposed');",
+                  "    pm.expect(co.proposedBy).to.eql('contractor');",
+                  "    pm.expect(co.requestedBy).to.eql('owner');",
+                  "    pm.expect(co.price.value).to.eql('250.00');",
+                  "});",
+                  "pm.collectionVariables.set('changeOrderId', co.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{contractorToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/change-orders",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects", "{{projectId}}", "change-orders"]
+            },
+            "description": "Contractor token. Price in integer euro cents (0 records a free change). requestedBy defaults to the proposer.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Move the shower tap 20 cm to the left\",\n  \"priceCents\": 25000,\n  \"requestedBy\": \"owner\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Contractor tries to accept their own extra (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 403', () => pm.response.to.have.status(403));",
+                  "pm.test('Error is CANNOT_DECIDE_OWN_CHANGE_ORDER', () => pm.expect(pm.response.json().error).to.eql('CANNOT_DECIDE_OWN_CHANGE_ORDER'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{contractorToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/change-orders/{{changeOrderId}}/accept",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "change-orders",
+                "{{changeOrderId}}",
+                "accept"
+              ]
+            },
+            "description": "Only the party that did not propose an extra can accept or decline it."
+          },
+          "response": []
+        },
+        {
+          "name": "Owner accepts the extra (new milestone)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "const co = body.changeOrders.find((x) => x.id === pm.collectionVariables.get('changeOrderId'));",
+                  "pm.test('Accepted and linked to a new milestone', () => {",
+                  "    pm.expect(co.status).to.eql('accepted');",
+                  "    pm.expect(co.decidedBy).to.eql('owner');",
+                  "    pm.expect(co.milestone).to.be.an('object');",
+                  "});",
+                  "const m = body.milestones.find((x) => x.id === co.milestone.id);",
+                  "pm.test('The new milestone is PLANNED, last, with the whole price held', () => {",
+                  "    pm.expect(m.status).to.eql('PLANNED');",
+                  "    pm.expect(body.milestones.at(-1).id).to.eql(m.id);",
+                  "    pm.expect(m.amount.value).to.eql('250.00');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/change-orders/{{changeOrderId}}/accept",
+              "host": ["{{baseUrl}}"],
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "change-orders",
+                "{{changeOrderId}}",
+                "accept"
+              ]
+            },
+            "description": "Owner token. The extra is appended to the plan, dated after the last milestone, and is funded and released like any other."
+          },
+          "response": []
+        },
+        {
+          "name": "Propose an extra with a fractional price (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error is Bad Request', () => pm.expect(pm.response.json().error).to.eql('Bad Request'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/change-orders",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects", "{{projectId}}", "change-orders"]
+            },
+            "description": "Prices are integer euro cents, from 0 to 200000 (the per-milestone cap).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Extra socket in the hallway\",\n  \"priceCents\": 12.5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
     }
   ],
   "variable": [
@@ -1321,6 +1542,11 @@
     },
     {
       "key": "lastProofDecision",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "changeOrderId",
       "value": "",
       "type": "string"
     }

@@ -33,8 +33,8 @@ info:
     | `ownerToken` | `owner` | fund, approve, reject, cancel, reauthorize, manage retention, demo controls |
     | `contractorToken` | `contractor` | upload proofs |
 
-    Both roles can read the project, retry failed settlement steps and submit dispute
-    evidence. A missing token, a wrong token and an unknown project all return the same
+    Both roles can read the project, retry failed settlement steps, submit dispute
+    evidence and propose change orders (only the other party can accept or decline one). A missing token, a wrong token and an unknown project all return the same
     `401 UNAUTHORIZED`, so project ids cannot be probed. A valid token with the wrong role
     returns `403 FORBIDDEN`.
 
@@ -81,6 +81,10 @@ tags:
     description: Proof-of-work uploads, AI verification and owner rejection.
   - name: Retention
     description: The snagging retention kept back from each release.
+  - name: Change orders
+    description: |
+      Extras agreed while the work is under way. Work outside the plan or an accepted
+      change order cannot be paid, so anything new is recorded here first.
   - name: Disputes
     description: Evidence pack and evidence submission for PayPal disputes.
   - name: Webhooks
@@ -829,6 +833,111 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/projects/{projectId}/change-orders:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    post:
+      tags: [Change orders]
+      operationId: proposeChangeOrder
+      summary: Propose an extra (change order)
+      description: |
+        Either party proposes work that was not in the plan, with its price (`0` for a
+        free change that should still be on record). `requestedBy` records who asked for
+        the work and defaults to the proposer. The proposal is appended to the ledger
+        (`change_order_proposed`). At most 20 change orders per project.
+      x-roles: [owner, contractor]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangeOrderRequest"
+            example:
+              description: Move the shower tap 20 cm to the left
+              priceCents: 25000
+              requestedBy: owner
+      responses:
+        "201":
+          $ref: "#/components/responses/ProjectView"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: "`TOO_MANY_CHANGE_ORDERS`: the project already has 20."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/projects/{projectId}/change-orders/{changeOrderId}/accept:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/changeOrderId"
+    post:
+      tags: [Change orders]
+      operationId: acceptChangeOrder
+      summary: Accept an extra proposed by the other party
+      description: |
+        Only the party that did NOT propose the extra can accept it. A priced extra becomes
+        a new milestone at the end of the plan (`PLANNED`, nothing upfront, the whole price
+        held, photo proof, the description as its checklist), dated after the last
+        milestone; it is then funded and released like any other. A free extra is only
+        recorded. Appended to the ledger as `change_order_accepted`.
+      x-roles: [owner, contractor]
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: "`CANNOT_DECIDE_OWN_CHANGE_ORDER`: the caller proposed it."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: CANNOT_DECIDE_OWN_CHANGE_ORDER
+                errorDescription: You proposed this extra, so only the owner can accept it.
+        "404":
+          $ref: "#/components/responses/ChangeOrderNotFound"
+        "409":
+          $ref: "#/components/responses/ChangeOrderAlreadyDecided"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/projects/{projectId}/change-orders/{changeOrderId}/decline:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/changeOrderId"
+    post:
+      tags: [Change orders]
+      operationId: declineChangeOrder
+      summary: Decline an extra proposed by the other party
+      description: |
+        Only the party that did NOT propose the extra can decline it. The change order
+        stays on record as `declined` (`change_order_declined` in the ledger).
+      x-roles: [owner, contractor]
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: "`CANNOT_DECIDE_OWN_CHANGE_ORDER`: the caller proposed it."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/ChangeOrderNotFound"
+        "409":
+          $ref: "#/components/responses/ChangeOrderAlreadyDecided"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /api/projects/{projectId}/demo/advance-clock:
     parameters:
       - $ref: "#/components/parameters/projectId"
@@ -1099,6 +1208,15 @@ components:
         minLength: 1
         maxLength: 64
       example: ms_f8f80c4d1d7549c4
+    changeOrderId:
+      name: changeOrderId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 64
+      example: co_3b1f0e2a9c6d4e57
 
   headers:
     RateLimit:
@@ -1159,6 +1277,21 @@ components:
           example:
             error: MILESTONE_NOT_FOUND
             errorDescription: No milestone with that id in this project.
+    ChangeOrderNotFound:
+      description: "`CHANGE_ORDER_NOT_FOUND`: no change order with that id in this project."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: CHANGE_ORDER_NOT_FOUND
+            errorDescription: No change order with that id in this project.
+    ChangeOrderAlreadyDecided:
+      description: "`CHANGE_ORDER_ALREADY_DECIDED`: it was already accepted or declined."
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
     DemoDisabled:
       description: "`NOT_FOUND`: demo controls are disabled (`DEMO_MODE` is not `true`)."
       content:
@@ -1597,6 +1730,7 @@ components:
           governance,
           totals,
           milestones,
+          changeOrders,
           ledger,
         ]
       properties:
@@ -1655,6 +1789,11 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Milestone"
+        changeOrders:
+          type: array
+          description: Oldest first.
+          items:
+            $ref: "#/components/schemas/ChangeOrder"
         ledger:
           type: object
           required: [integrity, entries]
@@ -1666,6 +1805,85 @@ components:
               description: Newest first.
               items:
                 $ref: "#/components/schemas/LedgerEntry"
+
+    ChangeOrderRequest:
+      type: object
+      required: [description, priceCents]
+      additionalProperties: false
+      properties:
+        description:
+          type: string
+          minLength: 3
+          maxLength: 280
+          description: What the extra work is. Flattened to one line; it becomes the checklist.
+        priceCents:
+          type: integer
+          minimum: 0
+          maximum: 200000
+          description: Integer euro cents. `0` records a free change. Capped like a milestone.
+        requestedBy:
+          type: string
+          enum: [owner, contractor]
+          description: Who asked for the work. Defaults to the proposer.
+
+    ChangeOrder:
+      type: object
+      required:
+        [
+          id,
+          seq,
+          description,
+          price,
+          requestedBy,
+          proposedBy,
+          decidedBy,
+          status,
+          milestone,
+          createdAt,
+          decidedAt,
+          canDecide,
+        ]
+      properties:
+        id:
+          type: string
+        seq:
+          type: integer
+        description:
+          type: string
+        price:
+          $ref: "#/components/schemas/Money"
+        requestedBy:
+          type: string
+          enum: [owner, contractor]
+        proposedBy:
+          type: string
+          enum: [owner, contractor]
+        decidedBy:
+          type: [string, "null"]
+          enum: [owner, contractor, null]
+        status:
+          type: string
+          enum: [proposed, accepted, declined]
+        milestone:
+          description: The milestone an accepted, priced extra became.
+          type: [object, "null"]
+          required: [id, seq, title]
+          properties:
+            id:
+              type: string
+            seq:
+              type: integer
+            title:
+              type: string
+        createdAt:
+          type: string
+          format: date-time
+        decidedAt:
+          type: [string, "null"]
+          format: date-time
+        canDecide:
+          type: boolean
+          description: True when the caller may accept or decline it.
 
     Milestone:
       type: object
@@ -1984,7 +2202,8 @@ components:
             `policy_decision`, `held_released`, `schedule_shifted`, `proof_rejected`,
             `milestone_cancelled`, `funds_reauthorized`, `retention_refunded`,
             `dispute_opened`, `dispute_updated`, `dispute_evidence_submitted`,
-            `dispute_resolved`, `payout_status`, `paypal_event`, `demo_clock_advanced`.
+            `dispute_resolved`, `payout_status`, `paypal_event`, `demo_clock_advanced`,
+            `change_order_proposed`, `change_order_accepted`, `change_order_declined`.
         amountCents:
           type: [integer, "null"]
         paypalRef:

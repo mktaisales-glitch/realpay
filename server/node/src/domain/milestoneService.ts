@@ -17,25 +17,32 @@ import type { Db } from "../db/database.ts";
 import {
   countAiVerdictsSince,
   countProofs,
+  decideChangeOrderRow,
   findMilestoneByPayPalRef,
   findPayoutByBatch,
   getMilestone,
+  getChangeOrder,
   getMilestoneById,
   getPayout,
   getProject,
+  insertChangeOrder,
   insertMilestone,
   insertProject,
   insertProof,
+  listChangeOrders,
   listMilestones,
   listProofs,
+  otherParty,
   proofHashExists,
   recordWebhookEvent,
   setClockOffset,
   updateMilestone,
   updatePayoutStatusByBatch,
   upsertPayout,
+  type ChangeOrder,
   type Milestone,
   type MilestoneStatus,
+  type Party,
   type PayoutKind,
   type Project,
   type Proof,
@@ -60,7 +67,7 @@ import {
   shiftAfterRelease,
   toIsoDate,
 } from "./schedule.ts";
-import type { Template } from "./templates.ts";
+import { MAX_MILESTONE_EUR, type Template } from "./templates.ts";
 
 /* ######################################################################
  * Milestone engine.
@@ -127,6 +134,23 @@ export type ProofOutcome = {
   reason: string;
   status: MilestoneStatus;
 };
+
+export type ChangeOrderInput = {
+  description: string;
+  priceCents: number;
+  /** Who asked for the work; defaults to whoever records it. */
+  requestedBy?: Party;
+};
+
+/**
+ * An accepted extra becomes one milestone, so it obeys the same cap as any
+ * milestone (the Pay Later limit), and it gets a short window of its own.
+ */
+export const MAX_CHANGE_ORDER_CENTS = MAX_MILESTONE_EUR * 100;
+export const MAX_CHANGE_ORDER_DESCRIPTION_LENGTH = 280;
+export const MAX_CHANGE_ORDERS_PER_PROJECT = 20;
+export const CHANGE_ORDER_DURATION_DAYS = 3;
+const CHANGE_ORDER_TITLE_LENGTH = 60;
 
 /** Enough for honest retries; stops one milestone from soaking up AI calls. */
 export const MAX_PROOFS_PER_MILESTONE = 8;
@@ -725,6 +749,201 @@ export function createMilestoneService(deps: ServiceDependencies) {
       detail: { days },
     });
     return projectToday(requireProject(projectId));
+  }
+
+  /* ---------- change orders ---------- */
+
+  /**
+   * Records work asked for outside the plan. It changes nothing until the
+   * other party accepts it; until then it cannot be funded or paid.
+   */
+  function proposeChangeOrder(
+    projectId: string,
+    role: Party,
+    input: ChangeOrderInput,
+  ): ChangeOrder {
+    const project = requireProject(projectId);
+    // One line, no quote fences: an accepted extra's description becomes
+    // the checklist the AI inspector reads.
+    const description = input.description
+      .replaceAll(/[\p{Cc}\s]+/gu, " ")
+      .replaceAll('"""', "")
+      .trim();
+    if (
+      description.length < 3 ||
+      description.length > MAX_CHANGE_ORDER_DESCRIPTION_LENGTH
+    ) {
+      throw new DomainError(
+        400,
+        "INVALID_CHANGE_ORDER",
+        `Describe the extra in 3 to ${MAX_CHANGE_ORDER_DESCRIPTION_LENGTH} characters.`,
+      );
+    }
+    if (
+      !Number.isSafeInteger(input.priceCents) ||
+      input.priceCents < 0 ||
+      input.priceCents > MAX_CHANGE_ORDER_CENTS
+    ) {
+      throw new DomainError(
+        400,
+        "INVALID_CHANGE_ORDER",
+        `An extra costs between ${formatEuro(0)} and ${formatEuro(MAX_CHANGE_ORDER_CENTS)}, in whole cents.`,
+        { maxCents: MAX_CHANGE_ORDER_CENTS },
+      );
+    }
+    const existing = listChangeOrders(db, project.id);
+    if (existing.length >= MAX_CHANGE_ORDERS_PER_PROJECT) {
+      throw new DomainError(
+        409,
+        "TOO_MANY_CHANGE_ORDERS",
+        `A project can record at most ${MAX_CHANGE_ORDERS_PER_PROJECT} change orders.`,
+      );
+    }
+    const changeOrder: ChangeOrder = {
+      id: newId("co"),
+      projectId: project.id,
+      seq: (existing.at(-1)?.seq ?? 0) + 1,
+      requestedBy: input.requestedBy ?? role,
+      proposedBy: role,
+      description,
+      priceCents: input.priceCents,
+      status: "proposed",
+      milestoneId: null,
+      createdAt: projectNow(project).toISOString(),
+      decidedAt: null,
+    };
+    db.transaction(() => {
+      insertChangeOrder(db, changeOrder);
+      ledger(project, null, role, "change_order_proposed", {
+        amountCents: changeOrder.priceCents,
+        detail: {
+          changeOrderId: changeOrder.id,
+          seq: changeOrder.seq,
+          requestedBy: changeOrder.requestedBy,
+          description,
+        },
+      });
+    })();
+    return changeOrder;
+  }
+
+  /** The milestone an accepted, paid extra turns into: last in the plan. */
+  function extraMilestone(project: Project, changeOrder: ChangeOrder) {
+    const milestones = listMilestones(db, project.id);
+    const last = milestones.at(-1);
+    // ISO dates compare as strings: start the day after the last milestone, never in the past.
+    let start = projectToday(project);
+    if (last && addDays(last.forecastEnd, 1) > start) {
+      start = addDays(last.forecastEnd, 1);
+    }
+    const [window] = planSequential(start, [CHANGE_ORDER_DURATION_DAYS]) as [
+      { start: string; end: string },
+    ];
+    const title =
+      changeOrder.description.length > CHANGE_ORDER_TITLE_LENGTH
+        ? `${changeOrder.description.slice(0, CHANGE_ORDER_TITLE_LENGTH - 1).trimEnd()}…`
+        : changeOrder.description;
+    const milestone: Milestone = {
+      id: newId("ms"),
+      projectId: project.id,
+      seq: (last?.seq ?? 0) + 1,
+      title: `Extra #${changeOrder.seq}: ${title}`,
+      checklist: [changeOrder.description],
+      proofType: "photo",
+      upfrontLabel: "Nothing upfront",
+      heldLabel: `Agreed extra (change order #${changeOrder.seq})`,
+      upfrontCents: 0,
+      heldCents: changeOrder.priceCents,
+      supplierEmail: deps.supplierEmail,
+      contractorEmail: deps.contractorEmail,
+      plannedStart: window.start,
+      plannedEnd: window.end,
+      forecastStart: window.start,
+      forecastEnd: window.end,
+      status: "PLANNED",
+      orderId: null,
+      authorizationId: null,
+      authExpiresAt: null,
+      upfrontCaptureId: null,
+      heldCaptureId: null,
+      paypalFeeCents: 0,
+      retentionCents: 0,
+      retentionReleaseAt: null,
+      retentionStatus: "none",
+      disputeId: null,
+      disputeStatus: null,
+      releasedAt: null,
+    };
+    return milestone;
+  }
+
+  /**
+   * Only the party who did not propose an extra can accept or decline it.
+   * Accepting one with a price adds it to the plan as a milestone, funded
+   * and released like any other; a free one is only kept on record.
+   */
+  function decideChangeOrder(
+    projectId: string,
+    changeOrderId: string,
+    role: Party,
+    decision: "accept" | "decline",
+  ): ChangeOrder {
+    const project = requireProject(projectId);
+    const changeOrder = getChangeOrder(db, project.id, changeOrderId);
+    if (!changeOrder) {
+      throw new DomainError(
+        404,
+        "CHANGE_ORDER_NOT_FOUND",
+        "No change order with that id in this project.",
+      );
+    }
+    if (changeOrder.proposedBy === role) {
+      throw new DomainError(
+        403,
+        "CANNOT_DECIDE_OWN_CHANGE_ORDER",
+        `You proposed this extra, so only the ${otherParty(role)} can ${decision} it.`,
+      );
+    }
+    const decidedAt = projectNow(project).toISOString();
+    const milestone =
+      decision === "accept" && changeOrder.priceCents > 0
+        ? extraMilestone(project, changeOrder)
+        : null;
+    db.transaction(() => {
+      // The milestone goes in first: the change order points at it.
+      if (milestone) insertMilestone(db, milestone);
+      const recorded = decideChangeOrderRow(db, changeOrder.id, {
+        status: decision === "accept" ? "accepted" : "declined",
+        milestoneId: milestone?.id ?? null,
+        decidedAt,
+      });
+      if (!recorded) {
+        throw new DomainError(
+          409,
+          "CHANGE_ORDER_ALREADY_DECIDED",
+          `This change order was already ${changeOrder.status === "proposed" ? "decided" : changeOrder.status}.`,
+          { status: changeOrder.status },
+        );
+      }
+      ledger(
+        project,
+        milestone,
+        role,
+        decision === "accept"
+          ? "change_order_accepted"
+          : "change_order_declined",
+        {
+          amountCents: changeOrder.priceCents,
+          detail: {
+            changeOrderId: changeOrder.id,
+            seq: changeOrder.seq,
+            proposedBy: changeOrder.proposedBy,
+            ...(milestone ? { milestoneSeq: milestone.seq } : {}),
+          },
+        },
+      );
+    })();
+    return getChangeOrder(db, project.id, changeOrder.id) ?? changeOrder;
   }
 
   /* ---------- funding ---------- */
@@ -1602,6 +1821,8 @@ export function createMilestoneService(deps: ServiceDependencies) {
     projectToday,
     createProject,
     advanceClock,
+    proposeChangeOrder,
+    decideChangeOrder,
     createFundingOrder,
     authorizeFundingOrder,
     fundWithCard,

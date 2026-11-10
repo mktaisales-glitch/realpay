@@ -91,6 +91,29 @@ export type Payout = {
   createdAt: string;
 };
 
+export type Party = "owner" | "contractor";
+
+export function otherParty(party: Party): Party {
+  return party === "owner" ? "contractor" : "owner";
+}
+
+export type ChangeOrderStatus = "proposed" | "accepted" | "declined";
+
+/** Work asked for outside the plan, agreed (or not) by both parties. */
+export type ChangeOrder = {
+  id: string;
+  projectId: string;
+  seq: number;
+  requestedBy: Party;
+  proposedBy: Party;
+  description: string;
+  priceCents: number;
+  status: ChangeOrderStatus;
+  milestoneId: string | null;
+  createdAt: string;
+  decidedAt: string | null;
+};
+
 const PROJECT_COLUMNS = {
   id: "id",
   templateId: "template_id",
@@ -141,6 +164,20 @@ const MILESTONE_COLUMNS = {
   disputeStatus: "dispute_status",
   releasedAt: "released_at",
 } as const satisfies Record<keyof Milestone, string>;
+
+const CHANGE_ORDER_COLUMNS = {
+  id: "id",
+  projectId: "project_id",
+  seq: "seq",
+  requestedBy: "requested_by",
+  proposedBy: "proposed_by",
+  description: "description",
+  priceCents: "price_cents",
+  status: "status",
+  milestoneId: "milestone_id",
+  createdAt: "created_at",
+  decidedAt: "decided_at",
+} as const satisfies Record<keyof ChangeOrder, string>;
 
 type Row = Record<string, unknown>;
 
@@ -292,6 +329,59 @@ export function findMilestoneByPayPalRef(
     )
     .get({ ref }) as Row | undefined;
   return row ? toMilestone(row) : undefined;
+}
+
+export function insertChangeOrder(db: Db, changeOrder: ChangeOrder): void {
+  const columns = Object.values(CHANGE_ORDER_COLUMNS);
+  db.prepare(
+    `INSERT INTO change_orders (${columns.join(", ")}) VALUES (${columns.map((c) => `@${c}`).join(", ")})`,
+  ).run(
+    Object.fromEntries(
+      Object.entries(CHANGE_ORDER_COLUMNS).map(([key, column]) => [
+        column,
+        changeOrder[key as keyof ChangeOrder],
+      ]),
+    ),
+  );
+}
+
+export function listChangeOrders(db: Db, projectId: string): ChangeOrder[] {
+  return (
+    db
+      .prepare("SELECT * FROM change_orders WHERE project_id = ? ORDER BY seq")
+      .all(projectId) as Row[]
+  ).map((row) => fromRow<ChangeOrder>(row, CHANGE_ORDER_COLUMNS));
+}
+
+export function getChangeOrder(
+  db: Db,
+  projectId: string,
+  changeOrderId: string,
+): ChangeOrder | undefined {
+  const row = db
+    .prepare("SELECT * FROM change_orders WHERE id = ? AND project_id = ?")
+    .get(changeOrderId, projectId) as Row | undefined;
+  return row ? fromRow<ChangeOrder>(row, CHANGE_ORDER_COLUMNS) : undefined;
+}
+
+/** Records the decision once: a change order that is no longer proposed is left alone. */
+export function decideChangeOrderRow(
+  db: Db,
+  changeOrderId: string,
+  decision: {
+    status: Exclude<ChangeOrderStatus, "proposed">;
+    milestoneId: string | null;
+    decidedAt: string;
+  },
+): boolean {
+  return (
+    db
+      .prepare(
+        `UPDATE change_orders SET status = @status, milestone_id = @milestoneId, decided_at = @decidedAt
+         WHERE id = @id AND status = 'proposed'`,
+      )
+      .run({ ...decision, id: changeOrderId }).changes === 1
+  );
 }
 
 export function insertProof(db: Db, proof: Proof): void {

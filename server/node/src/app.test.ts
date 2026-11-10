@@ -393,6 +393,127 @@ describe("end-to-end over HTTP", () => {
   });
 });
 
+function changeOrders(project: { projectId: string }) {
+  return `/api/projects/${project.projectId}/change-orders`;
+}
+
+describe("change orders over HTTP", () => {
+  it("lets the contractor propose and the owner accept, adding the extra to the plan", async () => {
+    const { app, project, owner, contractor } = setUp();
+
+    const proposed = await request(app)
+      .post(changeOrders(project))
+      .set("Authorization", contractor)
+      .send({
+        description: "Move the shower tap 20 cm to the left",
+        priceCents: 25_000,
+        requestedBy: "owner",
+      });
+    expect(proposed.status).toBe(201);
+    const [changeOrder] = proposed.body.changeOrders;
+    expect(changeOrder).toMatchObject({
+      seq: 1,
+      status: "proposed",
+      requestedBy: "owner",
+      proposedBy: "contractor",
+      price: { value: "250.00" },
+      canDecide: false,
+    });
+
+    const selfAccept = await request(app)
+      .post(`${changeOrders(project)}/${changeOrder.id}/accept`)
+      .set("Authorization", contractor);
+    expect(selfAccept.status).toBe(403);
+    expect(selfAccept.body.error).toBe("CANNOT_DECIDE_OWN_CHANGE_ORDER");
+
+    const accepted = await request(app)
+      .post(`${changeOrders(project)}/${changeOrder.id}/accept`)
+      .set("Authorization", owner);
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.changeOrders[0]).toMatchObject({
+      status: "accepted",
+      decidedBy: "owner",
+      milestone: { seq: 3 },
+    });
+    expect(accepted.body.milestones).toHaveLength(3);
+    expect(accepted.body.milestones[2]).toMatchObject({
+      status: "PLANNED",
+      amount: { value: "250.00" },
+    });
+    expect(accepted.body.milestones[2].actions).toContain("fund");
+    expect(
+      accepted.body.ledger.entries
+        .slice(0, 2)
+        .map((entry: { action: string }) => entry.action),
+    ).toEqual(["change_order_accepted", "change_order_proposed"]);
+  });
+
+  it("lets the owner decline an extra the contractor proposed", async () => {
+    const { app, project, owner, contractor } = setUp();
+    const proposed = await request(app)
+      .post(changeOrders(project))
+      .set("Authorization", owner)
+      .send({ description: "Paint the hallway too", priceCents: 30_000 });
+
+    const declined = await request(app)
+      .post(
+        `${changeOrders(project)}/${proposed.body.changeOrders[0].id}/decline`,
+      )
+      .set("Authorization", contractor);
+
+    expect(declined.status).toBe(200);
+    expect(declined.body.changeOrders[0]).toMatchObject({
+      status: "declined",
+      decidedBy: "contractor",
+      milestone: null,
+    });
+    expect(declined.body.milestones).toHaveLength(2);
+  });
+
+  it("validates the body: price in whole cents, within the milestone cap", async () => {
+    const { app, project, owner } = setUp();
+
+    for (const body of [
+      { description: "Extra socket", priceCents: 12.5 },
+      { description: "Extra socket", priceCents: 200_001 },
+      { description: "Extra socket", priceCents: "100" },
+      { description: "no", priceCents: 100 },
+      { description: "Extra socket", priceCents: 100, requestedBy: "ai" },
+    ]) {
+      const response = await request(app)
+        .post(changeOrders(project))
+        .set("Authorization", owner)
+        .send(body);
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBe("Bad Request");
+    }
+  });
+
+  it("needs a link for this project", async () => {
+    const { app, project, createProject } = setUp();
+    const other = createProject();
+
+    const response = await request(app)
+      .post(changeOrders(project))
+      .set("Authorization", `Bearer ${other.ownerToken}`)
+      .send({ description: "Extra socket", priceCents: 100 });
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual(UNAUTHORIZED);
+  });
+
+  it("answers 404 for an unknown change order", async () => {
+    const { app, project, owner } = setUp();
+
+    const response = await request(app)
+      .post(`${changeOrders(project)}/co_missing/accept`)
+      .set("Authorization", owner);
+
+    expect(response.status).toBe(404);
+    expect(response.body.error).toBe("CHANGE_ORDER_NOT_FOUND");
+  });
+});
+
 describe("PayPal webhook endpoint", () => {
   it("rejects an event whose signature does not verify", async () => {
     const { app, paypal } = setUp();

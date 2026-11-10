@@ -2,9 +2,11 @@ import { listLedger, verifyLedger } from "../audit/ledger.ts";
 import type { Db } from "../db/database.ts";
 import {
   getProject,
+  listChangeOrders,
   listMilestones,
   listPayouts,
   listProofs,
+  otherParty,
   type Milestone,
   type Project,
 } from "../db/repository.ts";
@@ -313,6 +315,32 @@ export function buildProjectView(
       fees: amount(totals.feesCents),
     },
     milestones: milestoneViews,
+    changeOrders: listChangeOrders(db, project.id).map((changeOrder) => {
+      const milestone = milestones.find(
+        (m) => m.id === changeOrder.milestoneId,
+      );
+      return {
+        id: changeOrder.id,
+        seq: changeOrder.seq,
+        description: changeOrder.description,
+        price: amount(changeOrder.priceCents),
+        requestedBy: changeOrder.requestedBy,
+        proposedBy: changeOrder.proposedBy,
+        // Only the other party decides, so a decision names them.
+        decidedBy:
+          changeOrder.status === "proposed"
+            ? null
+            : otherParty(changeOrder.proposedBy),
+        status: changeOrder.status,
+        milestone: milestone
+          ? { id: milestone.id, seq: milestone.seq, title: milestone.title }
+          : null,
+        createdAt: changeOrder.createdAt,
+        decidedAt: changeOrder.decidedAt,
+        canDecide:
+          changeOrder.status === "proposed" && changeOrder.proposedBy !== role,
+      };
+    }),
     ledger: {
       integrity,
       entries: ledger.toReversed(),

@@ -10,7 +10,11 @@ import { z } from "zod";
 import type { Config } from "../config.ts";
 import type { Db } from "../db/database.ts";
 import { DomainError } from "../domain/domainError.ts";
-import type { MilestoneService } from "../domain/milestoneService.ts";
+import {
+  MAX_CHANGE_ORDER_CENTS,
+  MAX_CHANGE_ORDER_DESCRIPTION_LENGTH,
+  type MilestoneService,
+} from "../domain/milestoneService.ts";
 import {
   buildProjectView,
   requireProjectRecord,
@@ -35,6 +39,20 @@ const createProjectSchema = z.object({
 const milestoneParamsSchema = z.object({
   projectId: z.string().min(1).max(64),
   milestoneId: z.string().min(1).max(64),
+});
+
+const changeOrderParamsSchema = z.object({
+  projectId: z.string().min(1).max(64),
+  changeOrderId: z.string().min(1).max(64),
+});
+const changeOrderSchema = z.object({
+  description: z
+    .string()
+    .trim()
+    .min(3)
+    .max(MAX_CHANGE_ORDER_DESCRIPTION_LENGTH),
+  priceCents: z.number().int().min(0).max(MAX_CHANGE_ORDER_CENTS),
+  requestedBy: z.enum(["owner", "contractor"]).optional(),
 });
 
 const reasonSchema = z.object({ reason: z.string().trim().min(3).max(300) });
@@ -92,6 +110,7 @@ export function createProjectRouter({
   // Every proof can cost one AI call from a shared free quota. A daily
   // limit per client keeps one visitor from spending it for everyone.
   const proofDailyLimiter = jsonRateLimit(24 * 60 * 60 * 1000, 25);
+  const changeOrderLimiter = jsonRateLimit(60 * 60 * 1000, 30);
 
   /** Demo controls do not exist outside demo mode, whoever asks. */
   function demoOnly(
@@ -240,6 +259,50 @@ export function createProjectRouter({
     sendView(request, response);
   }
 
+  /**
+   * Either party records an extra that was not in the plan. Nothing
+   * outside the plan can be paid until the other party accepts it.
+   */
+  function proposeChangeOrderRouteHandler(
+    request: Request,
+    response: Response,
+  ) {
+    const input = changeOrderSchema.parse(request.body ?? {});
+    const { project, role } = request.realpay!;
+    service.proposeChangeOrder(project.id, role, input);
+    sendView(request, response, 201);
+  }
+
+  /** The other party accepts the extra; a paid one joins the plan. */
+  function acceptChangeOrderRouteHandler(request: Request, response: Response) {
+    const { projectId, changeOrderId } = changeOrderParamsSchema.parse(
+      request.params,
+    );
+    service.decideChangeOrder(
+      projectId,
+      changeOrderId,
+      request.realpay!.role,
+      "accept",
+    );
+    sendView(request, response);
+  }
+
+  function declineChangeOrderRouteHandler(
+    request: Request,
+    response: Response,
+  ) {
+    const { projectId, changeOrderId } = changeOrderParamsSchema.parse(
+      request.params,
+    );
+    service.decideChangeOrder(
+      projectId,
+      changeOrderId,
+      request.realpay!.role,
+      "decline",
+    );
+    sendView(request, response);
+  }
+
   /* ---------- demo-only controls (DEMO_MODE=true) ---------- */
 
   /**
@@ -295,6 +358,7 @@ export function createProjectRouter({
   const contractor = requireRole(db, "contractor");
   const anyone = requireRole(db, "owner", "contractor");
   const ms = "/projects/:projectId/milestones/:milestoneId";
+  const co = "/projects/:projectId/change-orders";
 
   router.get("/templates", listTemplatesRouteHandler);
   router.post("/projects", createProjectLimiter, createProjectRouteHandler);
@@ -317,6 +381,20 @@ export function createProjectRouter({
     submitProofRouteHandler,
   );
   router.get(`${ms}/evidence`, anyone, evidencePackRouteHandler);
+
+  router.post(co, anyone, changeOrderLimiter, proposeChangeOrderRouteHandler);
+  router.post(
+    `${co}/:changeOrderId/accept`,
+    anyone,
+    changeOrderLimiter,
+    acceptChangeOrderRouteHandler,
+  );
+  router.post(
+    `${co}/:changeOrderId/decline`,
+    anyone,
+    changeOrderLimiter,
+    declineChangeOrderRouteHandler,
+  );
   router.post(`${ms}/dispute/evidence`, anyone, submitEvidenceRouteHandler);
 
   router.post(

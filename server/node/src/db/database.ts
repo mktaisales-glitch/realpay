@@ -5,6 +5,7 @@ import path from "node:path";
 /* ######################################################################
  * SQLite schema. One file, no ORM. Amounts are integer cents.
  * The ledger table is append-only: triggers reject UPDATE and DELETE.
+ * Change orders are never deleted either: a declined extra stays on record.
  * ###################################################################### */
 
 export type Db = Database.Database;
@@ -110,6 +111,21 @@ CREATE TRIGGER IF NOT EXISTS ledger_no_update BEFORE UPDATE ON ledger
   BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS ledger_no_delete BEFORE DELETE ON ledger
   BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
+
+CREATE TABLE IF NOT EXISTS change_orders (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  seq INTEGER NOT NULL,
+  requested_by TEXT NOT NULL CHECK (requested_by IN ('owner', 'contractor')),
+  proposed_by TEXT NOT NULL CHECK (proposed_by IN ('owner', 'contractor')),
+  description TEXT NOT NULL,
+  price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
+  status TEXT NOT NULL CHECK (status IN ('proposed', 'accepted', 'declined')),
+  milestone_id TEXT REFERENCES milestones(id),
+  created_at TEXT NOT NULL,
+  decided_at TEXT,
+  UNIQUE (project_id, seq)
+);
 
 CREATE TABLE IF NOT EXISTS webhook_events (
   id TEXT PRIMARY KEY,
