@@ -606,6 +606,33 @@ describe("PayPal webhook endpoint", () => {
     );
   });
 
+  it("asks PayPal to redeliver a payout event it cannot match yet", async () => {
+    const { app } = setUp();
+
+    const response = await request(app)
+      .post("/paypal-api/webhooks")
+      .send({
+        id: "WH-early-payout",
+        event_type: "PAYMENT.PAYOUTSBATCH.SUCCESS",
+        resource: { batch_header: { payout_batch_id: "UNKNOWN-BATCH" } },
+      });
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({ handled: false, duplicate: false });
+  });
+
+  it("acknowledges an unrelated event with 200 so PayPal stops sending it", async () => {
+    const { app } = setUp();
+
+    const response = await request(app).post("/paypal-api/webhooks").send({
+      id: "WH-other",
+      event_type: "CHECKOUT.ORDER.APPROVED",
+      resource: {},
+    });
+
+    expect(response.status).toBe(200);
+  });
+
   it("answers 400, not 500, to a webhook with no body", async () => {
     const { app } = setUp();
 

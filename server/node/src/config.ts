@@ -46,7 +46,6 @@ const configSchema = z.object({
   PORT: z.coerce.number().int().positive().default(8080),
   DATABASE_PATH: z.string().default("data/realpay.db"),
   UPLOAD_DIR: z.string().default("data/uploads"),
-  PUBLIC_BASE_URL: z.url().default("http://localhost:8080"),
   // Number of reverse proxies in front of the app (1 on Render). Rate
   // limits key on the client IP, so trusting a proxy that is not there
   // would let anyone pick their own IP with X-Forwarded-For.

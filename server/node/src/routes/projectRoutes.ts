@@ -113,6 +113,8 @@ export function createProjectRouter({
   // limit per client keeps one visitor from spending it for everyone.
   const proofDailyLimiter = jsonRateLimit(24 * 60 * 60 * 1000, 25);
   const changeOrderLimiter = jsonRateLimit(60 * 60 * 1000, 30);
+  // Every route below that calls PayPal: keeps a script from hammering it.
+  const paypalLimiter = jsonRateLimit(60 * 1000, 30);
 
   /** Demo controls do not exist outside demo mode, whoever asks. */
   function demoOnly(
@@ -382,14 +384,39 @@ export function createProjectRouter({
   router.post("/projects", createProjectLimiter, createProjectRouteHandler);
   router.get("/projects/:projectId", anyone, getProjectRouteHandler);
 
-  router.post(`${ms}/approve`, owner, approveRouteHandler);
-  router.post(`${ms}/reject`, owner, rejectRouteHandler);
-  router.post(`${ms}/cancel`, owner, cancelRouteHandler);
-  router.post(`${ms}/reauthorize`, owner, reauthorizeRouteHandler);
-  router.post(`${ms}/retry-upfront`, anyone, retryUpfrontRouteHandler);
-  router.post(`${ms}/retry-payout`, anyone, retryPayoutRouteHandler);
-  router.post(`${ms}/release-retention`, owner, releaseRetentionRouteHandler);
-  router.post(`${ms}/refund-retention`, owner, refundRetentionRouteHandler);
+  router.post(`${ms}/approve`, owner, paypalLimiter, approveRouteHandler);
+  router.post(`${ms}/reject`, owner, paypalLimiter, rejectRouteHandler);
+  router.post(`${ms}/cancel`, owner, paypalLimiter, cancelRouteHandler);
+  router.post(
+    `${ms}/reauthorize`,
+    owner,
+    paypalLimiter,
+    reauthorizeRouteHandler,
+  );
+  router.post(
+    `${ms}/retry-upfront`,
+    anyone,
+    paypalLimiter,
+    retryUpfrontRouteHandler,
+  );
+  router.post(
+    `${ms}/retry-payout`,
+    anyone,
+    paypalLimiter,
+    retryPayoutRouteHandler,
+  );
+  router.post(
+    `${ms}/release-retention`,
+    owner,
+    paypalLimiter,
+    releaseRetentionRouteHandler,
+  );
+  router.post(
+    `${ms}/refund-retention`,
+    owner,
+    paypalLimiter,
+    refundRetentionRouteHandler,
+  );
   router.post(
     `${ms}/proofs`,
     contractor,
@@ -419,12 +446,18 @@ export function createProjectRouter({
     changeOrderLimiter,
     withdrawChangeOrderRouteHandler,
   );
-  router.post(`${ms}/dispute/evidence`, anyone, submitEvidenceRouteHandler);
+  router.post(
+    `${ms}/dispute/evidence`,
+    anyone,
+    paypalLimiter,
+    submitEvidenceRouteHandler,
+  );
 
   router.post(
     `${ms}/demo/fund-with-test-card`,
     demoOnly,
     owner,
+    paypalLimiter,
     fundWithTestCardRouteHandler,
   );
   router.post(`${ms}/demo/dispute`, demoOnly, owner, openDisputeRouteHandler);

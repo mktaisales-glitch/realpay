@@ -1,4 +1,8 @@
-import { getFullScopeAccessToken } from "./authorization.ts";
+import {
+  forgetAccessToken,
+  getFullScopeAccessToken,
+  parseJson,
+} from "./authorization.ts";
 import { PAYPAL_API_BASE_URL } from "./constants.ts";
 import { CustomApiError } from "./customApiError.ts";
 
@@ -26,8 +30,6 @@ export async function provideDisputeEvidence(
     files,
   }: { disputeId: string; notes: string; files: EvidenceFile[] },
 ): Promise<unknown> {
-  const accessToken = await getFullScopeAccessToken(credentials);
-
   const form = new FormData();
   form.append(
     "input",
@@ -55,16 +57,25 @@ export async function provideDisputeEvidence(
   }
 
   // Content-Type is left to fetch so it can set the multipart boundary.
-  const response = await fetch(
-    `${PAYPAL_API_BASE_URL}/v1/customer/disputes/${encodeURIComponent(disputeId)}/provide-evidence`,
-    {
-      method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}` },
-      body: form,
-    },
-  );
-  const text = await response.text();
-  const result: unknown = text ? JSON.parse(text) : {};
+  const send = async () =>
+    fetch(
+      `${PAYPAL_API_BASE_URL}/v1/customer/disputes/${encodeURIComponent(disputeId)}/provide-evidence`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${await getFullScopeAccessToken(credentials)}`,
+        },
+        body: form,
+      },
+    );
+
+  let response = await send();
+  if (response.status === 401) {
+    // The cached token was revoked or expired early: get a new one once.
+    forgetAccessToken(credentials.clientId);
+    response = await send();
+  }
+  const result = await parseJson(response);
   if (!response.ok) {
     throw new CustomApiError(
       "PayPal provide-evidence failed",

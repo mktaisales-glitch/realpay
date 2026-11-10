@@ -51,6 +51,7 @@ import {
 } from "../db/repository.ts";
 import type {
   AuthorizationResult,
+  CaptureResult,
   PaymentsGateway,
 } from "../paypal/paymentsGateway.ts";
 import type { ProofVerifier } from "../verification/aiVerifier.ts";
@@ -59,7 +60,15 @@ import {
   runPrechecks,
 } from "../verification/prechecks.ts";
 import { DomainError } from "./domainError.ts";
-import { formatEuro, percentOf } from "./money.ts";
+import { CURRENCY, formatEuro, percentOf } from "./money.ts";
+import {
+  PAYOUT_AWAITING_FUNDS,
+  PAYOUT_BLOCKED,
+  PAYOUT_FAILED,
+  PAYOUT_UNKNOWN,
+  RETRYABLE_PAYOUT_STATUSES,
+  UNCONFIRMED_PAYOUT_STATUSES,
+} from "./payoutStatus.ts";
 import {
   checkReauthorize,
   isHoldExpired,
@@ -264,7 +273,7 @@ export function asPayPalClientError(
 }
 
 const HOLD_EXPIRED_REASON =
-  "This PayPal hold has expired, so it can no longer be captured. Nobody was charged for it: cancel the milestone and fund it again.";
+  "This PayPal hold has expired, so it can no longer be captured. The held part was never charged: cancel the milestone and fund it again.";
 
 function requireNoOpenDispute(milestone: Milestone) {
   if (milestone.disputeId && milestone.disputeStatus !== "RESOLVED") {
@@ -426,7 +435,11 @@ export function createMilestoneService(deps: ServiceDependencies) {
     return accepted === 0 ? base : `${base}-r${accepted}`;
   }
 
-  /** Sends one payout at most once; only a FAILED payout is ever sent again. */
+  /**
+   * Sends one payout at most once. A FAILED or UNKNOWN payout is sent again
+   * with the same sender_batch_id; an AWAITING_FUNDS one only once PayPal
+   * reports its capture COMPLETED (`fundsCleared`).
+   */
   async function payOut(
     project: Project,
     milestone: Milestone,
@@ -434,9 +447,14 @@ export function createMilestoneService(deps: ServiceDependencies) {
     receiver: string,
     amountCents: number,
     note: string,
+    options: { fundsCleared?: boolean } = {},
   ) {
     const existing = getPayout(db, milestone.id, kind);
-    if (existing && existing.status !== "FAILED") {
+    const resendable =
+      existing &&
+      (RETRYABLE_PAYOUT_STATUSES.has(existing.status) ||
+        (options.fundsCleared && existing.status === PAYOUT_AWAITING_FUNDS));
+    if (existing && !resendable) {
       return existing;
     }
     const base = {
@@ -467,22 +485,82 @@ export function createMilestoneService(deps: ServiceDependencies) {
         detail: { kind, receiver, status, senderBatchId },
       });
     } catch (error) {
+      // Only a definite 4xx means nothing was sent. After a timeout or a
+      // 5xx the payout may exist, so it must not look safe to refund.
+      const status = asPayPalClientError(error)
+        ? PAYOUT_FAILED
+        : PAYOUT_UNKNOWN;
       upsertPayout(db, {
         ...base,
         batchId: existing?.batchId ?? null,
-        status: "FAILED",
+        status,
       });
       ledger(project, milestone, "system", "payout_failed", {
         amountCents,
         detail: {
           kind,
           receiver,
+          status,
           error: errorMessage(error),
           paypalError: paypalErrorName(error),
         },
       });
     }
     return getPayout(db, milestone.id, kind);
+  }
+
+  /**
+   * Only a COMPLETED capture has moved money. PENDING means PayPal is still
+   * clearing it: the caller records it but pays nobody until the
+   * PAYMENT.CAPTURE.COMPLETED webhook. Anything else is a refusal, logged
+   * and thrown before any state changes.
+   */
+  function checkCapture(
+    project: Project,
+    milestone: Milestone,
+    part: "upfront" | "held",
+    capture: CaptureResult,
+  ): "completed" | "pending" {
+    if (capture.status === "COMPLETED") return "completed";
+    if (capture.status === "PENDING") {
+      ledger(project, milestone, "paypal", "capture_pending", {
+        amountCents:
+          part === "upfront" ? milestone.upfrontCents : milestone.heldCents,
+        paypalRef: capture.captureId,
+        detail: { part },
+      });
+      return "pending";
+    }
+    ledger(project, milestone, "paypal", "capture_declined", {
+      amountCents:
+        part === "upfront" ? milestone.upfrontCents : milestone.heldCents,
+      paypalRef: capture.captureId,
+      detail: { part, status: capture.status },
+    });
+    throw new DomainError(
+      402,
+      "CAPTURE_DECLINED",
+      "PayPal did not complete the payment, so nothing was paid out. The milestone is unchanged.",
+      { part, status: capture.status },
+    );
+  }
+
+  function awaitFunds(
+    milestone: Milestone,
+    kind: PayoutKind,
+    receiver: string,
+    amountCents: number,
+  ) {
+    upsertPayout(db, {
+      id: getPayout(db, milestone.id, kind)?.id ?? newId("po"),
+      milestoneId: milestone.id,
+      kind,
+      receiver,
+      amountCents,
+      createdAt: now().toISOString(),
+      batchId: null,
+      status: PAYOUT_AWAITING_FUNDS,
+    });
   }
 
   async function settleUpfront(project: Project, milestone: Milestone) {
@@ -498,15 +576,32 @@ export function createMilestoneService(deps: ServiceDependencies) {
         noteToPayer: `${milestone.upfrontLabel}: ${milestone.title}`,
         requestId: `${milestone.authorizationId}:capture-upfront`,
       });
-      updateMilestone(db, milestone.id, {
-        upfrontCaptureId: capture.captureId,
-        paypalFeeCents: milestone.paypalFeeCents + capture.feeCents,
-      });
-      ledger(project, milestone, "system", "upfront_captured", {
-        amountCents: milestone.upfrontCents,
-        paypalRef: capture.captureId,
-        detail: { status: capture.status, feeCents: capture.feeCents },
-      });
+      const outcome = checkCapture(project, milestone, "upfront", capture);
+      db.transaction(() => {
+        updateMilestone(db, milestone.id, {
+          upfrontCaptureId: capture.captureId,
+          paypalFeeCents: milestone.paypalFeeCents + capture.feeCents,
+        });
+        ledger(project, milestone, "system", "upfront_captured", {
+          amountCents: milestone.upfrontCents,
+          paypalRef: capture.captureId,
+          detail: { status: capture.status, feeCents: capture.feeCents },
+        });
+        if (outcome === "pending") {
+          awaitFunds(
+            milestone,
+            "supplier",
+            milestone.supplierEmail,
+            milestone.upfrontCents,
+          );
+        }
+      })();
+      if (outcome === "pending") return;
+    }
+    if (
+      getPayout(db, milestone.id, "supplier")?.status === PAYOUT_AWAITING_FUNDS
+    ) {
+      return;
     }
     await payOut(
       project,
@@ -543,6 +638,42 @@ export function createMilestoneService(deps: ServiceDependencies) {
           status: result.status,
           processorResponseCode: result.processorResponseCode,
         },
+      );
+    }
+
+    const expectedCents = milestone.upfrontCents + milestone.heldCents;
+    if (
+      result.amountCents !== expectedCents ||
+      (result.currencyCode && result.currencyCode !== CURRENCY)
+    ) {
+      // Never fund a milestone with a hold that does not cover it exactly.
+      ledger(project, milestone, "paypal", "funding_amount_mismatch", {
+        amountCents: result.amountCents,
+        paypalRef: result.authorizationId,
+        detail: {
+          expectedCents,
+          currencyCode: result.currencyCode ?? null,
+        },
+      });
+      await paypal
+        .voidAuthorization(
+          result.authorizationId,
+          `${result.authorizationId}:void-mismatch`,
+        )
+        .catch((error: unknown) => {
+          // The hold expires on its own; the ledger says it still exists.
+          ledger(project, milestone, "system", "void_failed", {
+            amountCents: result.amountCents,
+            paypalRef: result.authorizationId,
+            detail: { error: errorMessage(error) },
+          });
+        });
+      updateMilestone(db, milestone.id, { orderId: null });
+      throw new DomainError(
+        409,
+        "FUNDING_AMOUNT_MISMATCH",
+        "PayPal authorized a different amount than this milestone. The hold was released; fund it again.",
+        { expectedCents, authorizedCents: result.amountCents },
       );
     }
 
@@ -606,26 +737,37 @@ export function createMilestoneService(deps: ServiceDependencies) {
 
   async function releaseHeld(
     project: Project,
-    milestone: Milestone,
+    current: Milestone,
     actor: Actor,
     reason: string,
   ) {
-    if (!milestone.authorizationId) {
+    if (!current.authorizationId) {
       throw new DomainError(
         409,
         "NOT_FUNDED",
         "This milestone has no authorized funds.",
       );
     }
+    // The held capture is final: once it runs, nothing else can be taken
+    // from this authorization. Settle the materials first so the supplier's
+    // share is never lost; if that fails, nothing is released.
+    if (current.upfrontCents > 0 && !current.upfrontCaptureId) {
+      await settleUpfront(project, current);
+    }
+    const milestone = reload(current);
+    const authorizationId =
+      milestone.authorizationId ?? current.authorizationId;
     const capture = await paypal.captureAuthorization({
-      authorizationId: milestone.authorizationId,
+      authorizationId,
       amountCents: milestone.heldCents,
       finalCapture: true,
       invoiceId: `${milestone.id}-held`,
       noteToPayer: `${milestone.heldLabel}: ${milestone.title}`,
-      requestId: `${milestone.authorizationId}:capture-held`,
+      requestId: `${authorizationId}:capture-held`,
     });
+    const outcome = checkCapture(project, milestone, "held", capture);
     const retentionCents = percentOf(milestone.heldCents, project.retentionBps);
+    const contractorCents = milestone.heldCents - retentionCents;
     const today = projectToday(project);
 
     db.transaction(() => {
@@ -639,62 +781,76 @@ export function createMilestoneService(deps: ServiceDependencies) {
         status: retentionCents > 0 ? "RELEASED" : "CLOSED",
         releasedAt: now().toISOString(),
       });
-      // Written with the capture, so a crash before the payout below still
-      // leaves a FAILED row that "Retry payout" can pick up.
-      if (!getPayout(db, milestone.id, "contractor")) {
+      if (outcome === "pending") {
+        awaitFunds(
+          milestone,
+          "contractor",
+          milestone.contractorEmail,
+          contractorCents,
+        );
+      } else if (!getPayout(db, milestone.id, "contractor")) {
+        // Written with the capture, so a crash before the payout below
+        // still leaves a row that "Retry payout" can pick up.
         upsertPayout(db, {
           id: newId("po"),
           milestoneId: milestone.id,
           kind: "contractor",
           receiver: milestone.contractorEmail,
-          amountCents: milestone.heldCents - retentionCents,
+          amountCents: contractorCents,
           createdAt: now().toISOString(),
           batchId: null,
-          status: "FAILED",
+          status: PAYOUT_FAILED,
+        });
+      }
+      ledger(project, milestone, actor, "held_released", {
+        amountCents: milestone.heldCents,
+        paypalRef: capture.captureId,
+        detail: {
+          reason,
+          feeCents: capture.feeCents,
+          retentionCents,
+          captureStatus: capture.status,
+        },
+      });
+
+      const shifted = shiftAfterRelease(
+        listMilestones(db, project.id),
+        milestone.seq,
+        today,
+      );
+      for (const row of shifted.rows) {
+        // A milestone that is already finished keeps its real dates.
+        if (row.id !== milestone.id && SETTLED_STATUSES.has(row.status)) {
+          continue;
+        }
+        updateMilestone(db, row.id, {
+          forecastStart: row.forecastStart,
+          forecastEnd: row.forecastEnd,
+        });
+      }
+      if (shifted.deltaDays !== 0) {
+        ledger(project, milestone, "system", "schedule_shifted", {
+          detail: {
+            deltaDays: shifted.deltaDays,
+            message:
+              shifted.deltaDays < 0
+                ? `Finished ${-shifted.deltaDays} day(s) early; later milestones move forward.`
+                : `Finished ${shifted.deltaDays} day(s) late; later milestones move back.`,
+          },
         });
       }
     })();
-    ledger(project, milestone, actor, "held_released", {
-      amountCents: milestone.heldCents,
-      paypalRef: capture.captureId,
-      detail: { reason, feeCents: capture.feeCents, retentionCents },
-    });
 
-    const shifted = shiftAfterRelease(
-      listMilestones(db, project.id),
-      milestone.seq,
-      today,
-    );
-    for (const row of shifted.rows) {
-      // A milestone that is already finished keeps its real dates.
-      if (row.id !== milestone.id && SETTLED_STATUSES.has(row.status)) {
-        continue;
-      }
-      updateMilestone(db, row.id, {
-        forecastStart: row.forecastStart,
-        forecastEnd: row.forecastEnd,
-      });
+    if (outcome === "completed") {
+      await payOut(
+        project,
+        reload(milestone),
+        "contractor",
+        milestone.contractorEmail,
+        contractorCents,
+        `${milestone.heldLabel} for "${milestone.title}", verified and released by RealPay`,
+      );
     }
-    if (shifted.deltaDays !== 0) {
-      ledger(project, milestone, "system", "schedule_shifted", {
-        detail: {
-          deltaDays: shifted.deltaDays,
-          message:
-            shifted.deltaDays < 0
-              ? `Finished ${-shifted.deltaDays} day(s) early; later milestones move forward.`
-              : `Finished ${shifted.deltaDays} day(s) late; later milestones move back.`,
-        },
-      });
-    }
-
-    await payOut(
-      project,
-      reload(milestone),
-      "contractor",
-      milestone.contractorEmail,
-      milestone.heldCents - retentionCents,
-      `${milestone.heldLabel} for "${milestone.title}", verified and released by RealPay`,
-    );
     return reload(milestone);
   }
 
@@ -1197,11 +1353,16 @@ export function createMilestoneService(deps: ServiceDependencies) {
       if (!check.allowed) {
         throw new DomainError(409, check.code, check.reason);
       }
+      // Whatever has not been captured yet must be covered by the new hold,
+      // the materials included when their capture is still outstanding.
+      const renewCents =
+        milestone.heldCents +
+        (milestone.upfrontCaptureId ? 0 : milestone.upfrontCents);
       let result;
       try {
         result = await paypal.reauthorize({
           authorizationId: milestone.authorizationId,
-          amountCents: milestone.heldCents,
+          amountCents: renewCents,
           requestId: `${milestone.authorizationId}:reauthorize`,
         });
       } catch (error) {
@@ -1221,7 +1382,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
         authExpiresAt: result.expiresAt,
       });
       ledger(project, milestone, "owner", "funds_reauthorized", {
-        amountCents: milestone.heldCents,
+        amountCents: renewCents,
         paypalRef: result.authorizationId,
         detail: {
           previous: milestone.authorizationId,
@@ -1500,7 +1661,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
         milestone.retentionCents,
         `Warranty retention for "${milestone.title}", released by RealPay`,
       );
-      if (payout?.status !== "FAILED") {
+      if (payout && !UNCONFIRMED_PAYOUT_STATUSES.has(payout.status)) {
         updateMilestone(db, milestone.id, {
           retentionStatus: "paid",
           status: "CLOSED",
@@ -1520,7 +1681,14 @@ export function createMilestoneService(deps: ServiceDependencies) {
       requireStatus(milestone, ["RELEASED"], "refund the retention of");
       requireNoOpenDispute(milestone);
       const retentionPayout = getPayout(db, milestone.id, "retention");
-      if (retentionPayout && retentionPayout.status !== "FAILED") {
+      if (retentionPayout?.status === PAYOUT_UNKNOWN) {
+        throw new DomainError(
+          409,
+          "PAYOUT_OUTCOME_UNKNOWN",
+          "PayPal has not confirmed whether the retention payout went through. Retry the payout first; it cannot be paid twice.",
+        );
+      }
+      if (retentionPayout && retentionPayout.status !== PAYOUT_FAILED) {
         throw new DomainError(
           409,
           "RETENTION_ALREADY_PAID",
@@ -1576,11 +1744,11 @@ export function createMilestoneService(deps: ServiceDependencies) {
     return withLock(milestone.id, async () => {
       requireNoOpenDispute(milestone);
       const payout = getPayout(db, milestone.id, kind);
-      if (payout?.status !== "FAILED") {
+      if (!payout || !RETRYABLE_PAYOUT_STATUSES.has(payout.status)) {
         throw new DomainError(
           409,
           "PAYOUT_NOT_FAILED",
-          "Only a failed payout can be retried.",
+          "Only a failed or unconfirmed payout can be retried.",
         );
       }
       if (kind === "retention") {
@@ -1602,7 +1770,11 @@ export function createMilestoneService(deps: ServiceDependencies) {
         payout.amountCents,
         `RealPay ${kind} payout (retry)`,
       );
-      if (kind === "retention" && result?.status !== "FAILED") {
+      if (
+        kind === "retention" &&
+        result &&
+        !UNCONFIRMED_PAYOUT_STATUSES.has(result.status)
+      ) {
         updateMilestone(db, milestone.id, {
           retentionStatus: "paid",
           status: "CLOSED",
@@ -1809,6 +1981,18 @@ export function createMilestoneService(deps: ServiceDependencies) {
 
   type WebhookResult = { handled: boolean; duplicate: boolean };
 
+  /** Outcomes of a capture that PayPal left PENDING. */
+  const CAPTURE_EVENTS: ReadonlySet<string> = new Set([
+    "PAYMENT.CAPTURE.COMPLETED",
+    "PAYMENT.CAPTURE.DENIED",
+    "PAYMENT.CAPTURE.DECLINED",
+  ]);
+
+  /** A payout a webhook unblocked; sent after its transaction commits. */
+  type ClearedPayout = { milestoneId: string; kind: PayoutKind };
+
+  type AppliedWebhook = WebhookResult & { cleared?: ClearedPayout };
+
   /** Thrown inside the webhook transaction to undo the event record. */
   class UnmatchedEvent extends Error {}
 
@@ -1832,8 +2016,9 @@ export function createMilestoneService(deps: ServiceDependencies) {
         "PayPal could not verify this webhook signature.",
       );
     }
+    let applied: AppliedWebhook;
     try {
-      return db.transaction(() => {
+      applied = db.transaction(() => {
         const result = applyWebhook(eventId, event);
         if (!result.handled && !result.duplicate) {
           throw new UnmatchedEvent();
@@ -1846,9 +2031,40 @@ export function createMilestoneService(deps: ServiceDependencies) {
       }
       throw error;
     }
+    if (applied.cleared) {
+      await sendClearedPayout(applied.cleared);
+    }
+    return { handled: applied.handled, duplicate: applied.duplicate };
   }
 
-  function applyWebhook(eventId: string, event: WebhookEvent): WebhookResult {
+  /**
+   * A capture that was PENDING has completed: send the payout it was
+   * holding back. A failure here is recorded on the payout row like any
+   * other, so "Retry payout" recovers it.
+   */
+  async function sendClearedPayout({ milestoneId, kind }: ClearedPayout) {
+    const milestone = getMilestoneById(db, milestoneId);
+    const project = milestone ? getProject(db, milestone.projectId) : undefined;
+    const payout = getPayout(db, milestoneId, kind);
+    if (!milestone || !project || payout?.status !== PAYOUT_AWAITING_FUNDS) {
+      return;
+    }
+    await withLock(milestone.id, () =>
+      payOut(
+        project,
+        milestone,
+        kind,
+        payout.receiver,
+        payout.amountCents,
+        kind === "supplier"
+          ? `${milestone.upfrontLabel} for "${milestone.title}", paid directly by RealPay`
+          : `${milestone.heldLabel} for "${milestone.title}", verified and released by RealPay`,
+        { fundsCleared: true },
+      ),
+    );
+  }
+
+  function applyWebhook(eventId: string, event: WebhookEvent): AppliedWebhook {
     const eventType = event.event_type ?? "UNKNOWN";
     const resource = event.resource ?? {};
     const isNew = recordWebhookEvent(db, {
@@ -1885,7 +2101,8 @@ export function createMilestoneService(deps: ServiceDependencies) {
         status !== "FAILED" &&
         !PENDING_PAYOUT_STATUSES.has(payout.status)
       ) {
-        return { handled: false, duplicate: false };
+        // Matched and deliberately ignored: answer 200 so PayPal stops.
+        return { handled: true, duplicate: false };
       }
       updatePayoutStatusByBatch(db, batchId, status);
       const milestone = getMilestoneById(db, payout.milestoneId);
@@ -1928,6 +2145,43 @@ export function createMilestoneService(deps: ServiceDependencies) {
     const project = milestone ? getProject(db, milestone.projectId) : undefined;
     if (!milestone || !project) {
       return { handled: false, duplicate: false };
+    }
+
+    if (CAPTURE_EVENTS.has(eventType)) {
+      const captureId = typeof resource.id === "string" ? resource.id : "";
+      const kinds: Record<string, PayoutKind> = {};
+      if (milestone.upfrontCaptureId) {
+        kinds[milestone.upfrontCaptureId] = "supplier";
+      }
+      if (milestone.heldCaptureId) {
+        kinds[milestone.heldCaptureId] = "contractor";
+      }
+      const kind: PayoutKind | undefined = kinds[captureId];
+      const payout = kind ? getPayout(db, milestone.id, kind) : undefined;
+      if (kind && payout?.status === PAYOUT_AWAITING_FUNDS) {
+        const completed = eventType === "PAYMENT.CAPTURE.COMPLETED";
+        if (!completed) {
+          upsertPayout(db, { ...payout, status: PAYOUT_BLOCKED });
+        }
+        ledger(
+          project,
+          milestone,
+          "paypal",
+          completed ? "capture_completed" : "capture_denied",
+          {
+            amountCents: payout.amountCents,
+            paypalRef: captureId,
+            detail: { kind, webhookEventId: eventId },
+          },
+        );
+        return completed
+          ? {
+              handled: true,
+              duplicate: false,
+              cleared: { milestoneId: milestone.id, kind },
+            }
+          : { handled: true, duplicate: false };
+      }
     }
 
     if (eventType.startsWith("CUSTOMER.DISPUTE")) {

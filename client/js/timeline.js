@@ -127,10 +127,14 @@ export function buckets(milestones) {
     const upfront = milestone.upfront.paid ? cents(milestone.upfront.value) : 0;
     const held = cents(milestone.held.value);
     sums.upfront += upfront;
-    // Charged for materials, but the supplier payout failed and waits a retry.
+    // Charged for materials, but the supplier has not been paid yet.
     if (
       milestone.payouts.some(
-        (payout) => payout.kind === "supplier" && payout.status === "FAILED",
+        (payout) =>
+          payout.kind === "supplier" &&
+          ["FAILED", "UNKNOWN", "AWAITING_FUNDS", "BLOCKED"].includes(
+            payout.status,
+          ),
       )
     )
       sums.upfrontStuck += upfront;

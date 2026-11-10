@@ -697,7 +697,7 @@ describe("payouts", () => {
 
   it("records a failed payout and retries it with the same batch id, so PayPal cannot pay twice", async () => {
     t.paypal.sendPayout.mockRejectedValueOnce(
-      new Error("RECEIVER_UNREGISTERED"),
+      payPalClientError(422, "RECEIVER_UNREGISTERED"),
     );
     await t.service.fundWithCard(projectId, ms1, APPROVED_CARD);
 
@@ -1465,7 +1465,7 @@ describe("state guards", () => {
     await releaseFirstMilestone();
     t.service.advanceClock(projectId, 30);
     t.paypal.sendPayout.mockRejectedValueOnce(
-      new Error("RECEIVER_UNREGISTERED"),
+      payPalClientError(422, "RECEIVER_UNREGISTERED"),
     );
     await t.service.releaseRetention(projectId, ms1);
     expect(getPayout(t.db, ms1, "retention")?.status).toBe("FAILED");
@@ -1704,7 +1704,8 @@ describe("payout webhooks", () => {
       },
     });
 
-    expect(batch.handled).toBe(false);
+    // Matched and ignored on purpose: acknowledged so PayPal stops retrying.
+    expect(batch.handled).toBe(true);
     expect(getPayout(t.db, ms1, "supplier")?.status).toBe("UNCLAIMED");
   });
 
@@ -1734,5 +1735,171 @@ describe("payout webhooks", () => {
       "Contractor account closed",
     );
     expect(refunded.retentionStatus).toBe("refunded");
+  });
+});
+
+describe("money is only paid out once PayPal has it", () => {
+  beforeEach(() => setUp());
+
+  const pendingCapture = {
+    captureId: "CAP-PENDING",
+    status: "PENDING",
+    feeCents: 0,
+  };
+
+  it("holds the supplier payout while the capture is pending, then sends it when PayPal completes it", async () => {
+    t.paypal.captureAuthorization.mockResolvedValueOnce(pendingCapture);
+
+    await t.service.fundWithCard(projectId, ms1, APPROVED_CARD);
+
+    expect(t.paypal.sendPayout).not.toHaveBeenCalled();
+    expect(getPayout(t.db, ms1, "supplier")?.status).toBe("AWAITING_FUNDS");
+    expect(actions(ms1)).toContain("capture_pending");
+    expect(ownerView().totals.upfrontPaid.value).toBe("0.00");
+
+    const result = await t.service.handleWebhook(webhookHeaders, {
+      id: "WH-capture-done",
+      event_type: "PAYMENT.CAPTURE.COMPLETED",
+      resource: { id: "CAP-PENDING", status: "COMPLETED" },
+    });
+
+    expect(result).toEqual({ handled: true, duplicate: false });
+    expect(t.paypal.sendPayout).toHaveBeenCalledTimes(1);
+    expect(getPayout(t.db, ms1, "supplier")?.status).toBe("PENDING");
+    expect(actions(ms1)).toContain("capture_completed");
+  });
+
+  it("never pays out a pending capture that PayPal then denies", async () => {
+    t.paypal.captureAuthorization.mockResolvedValueOnce(pendingCapture);
+    await t.service.fundWithCard(projectId, ms1, APPROVED_CARD);
+
+    await t.service.handleWebhook(webhookHeaders, {
+      id: "WH-capture-denied",
+      event_type: "PAYMENT.CAPTURE.DENIED",
+      resource: { id: "CAP-PENDING", status: "DECLINED" },
+    });
+
+    expect(t.paypal.sendPayout).not.toHaveBeenCalled();
+    expect(getPayout(t.db, ms1, "supplier")?.status).toBe("BLOCKED");
+    expect(actions(ms1)).toContain("capture_denied");
+  });
+
+  it("pays nothing when PayPal declines the capture outright", async () => {
+    t.paypal.captureAuthorization.mockResolvedValueOnce({
+      captureId: "CAP-DECLINED",
+      status: "DECLINED",
+      feeCents: 0,
+    });
+
+    const funded = await t.service.fundWithCard(projectId, ms1, APPROVED_CARD);
+
+    expect(funded.status).toBe("FUNDED");
+    expect(funded.upfrontCaptureId).toBeNull();
+    expect(t.paypal.sendPayout).not.toHaveBeenCalled();
+    expect(actions(ms1)).toEqual(
+      expect.arrayContaining(["capture_declined", "upfront_capture_failed"]),
+    );
+  });
+
+  it("settles a missed upfront capture before it releases the held part", async () => {
+    t.paypal.captureAuthorization.mockRejectedValueOnce(
+      Object.assign(new Error("INTERNAL_SERVER_ERROR"), { statusCode: 500 }),
+    );
+    await t.service.fundWithCard(projectId, ms1, APPROVED_CARD);
+
+    await t.service.submitProof(projectId, ms1, upload("certificate"));
+
+    const finalFlags = t.paypal.captureAuthorization.mock.calls.map(
+      ([input]) => input.finalCapture,
+    );
+    expect(finalFlags).toEqual([false, false, true]);
+    expect(t.milestone(projectId, 1).upfrontCaptureId).toBeTruthy();
+    expect(getPayout(t.db, ms1, "supplier")).toBeDefined();
+    expect(getPayout(t.db, ms1, "contractor")).toBeDefined();
+  });
+
+  it("does not fund a milestone when PayPal authorizes a different amount", async () => {
+    const { orderId } = await t.service.createFundingOrder(projectId, ms1);
+    t.paypal.authorizeOrder.mockResolvedValueOnce({
+      orderId,
+      authorizationId: "AUTH-SHORT",
+      status: "CREATED",
+      expiresAt: "2026-12-09T09:00:00Z",
+      amountCents: 100,
+      processorResponseCode: "0000",
+    });
+
+    await expectDomainError(
+      t.service.authorizeFundingOrder(projectId, ms1, orderId),
+      409,
+      "FUNDING_AMOUNT_MISMATCH",
+    );
+
+    expect(t.paypal.voidAuthorization).toHaveBeenCalledWith(
+      "AUTH-SHORT",
+      "AUTH-SHORT:void-mismatch",
+    );
+    expect(t.milestone(projectId, 1)).toMatchObject({
+      status: "PLANNED",
+      orderId: null,
+    });
+    expect(actions(ms1)).toContain("funding_amount_mismatch");
+  });
+});
+
+describe("a payout PayPal did not confirm", () => {
+  it("is re-sent with the same batch id after a timeout", async () => {
+    setUp();
+    t.paypal.sendPayout.mockRejectedValueOnce(new Error("socket hang up"));
+
+    await t.service.fundWithCard(projectId, ms1, APPROVED_CARD);
+
+    expect(getPayout(t.db, ms1, "supplier")?.status).toBe("UNKNOWN");
+    expect(ownerView().totals.upfrontPaid.value).toBe("0.00");
+
+    const retried = await t.service.retryPayout(projectId, ms1, "supplier");
+
+    expect(retried?.status).toBe("PENDING");
+    const [first, second] = t.paypal.sendPayout.mock.calls.map(
+      ([input]) => input.senderBatchId,
+    );
+    expect(second).toBe(first);
+  });
+
+  it("blocks refunding a retention whose payout outcome is unknown", async () => {
+    setUp({ demoMode: true });
+    await releaseFirstMilestone();
+    t.service.advanceClock(projectId, 30);
+    t.paypal.sendPayout.mockRejectedValueOnce(new Error("ETIMEDOUT"));
+    await t.service.releaseRetention(projectId, ms1);
+    expect(getPayout(t.db, ms1, "retention")?.status).toBe("UNKNOWN");
+    expect(t.milestone(projectId, 1).retentionStatus).toBe("held");
+
+    await expectDomainError(
+      t.service.refundRetention(projectId, ms1, "Contractor unreachable"),
+      409,
+      "PAYOUT_OUTCOME_UNKNOWN",
+    );
+    expect(t.paypal.refundCapture).not.toHaveBeenCalled();
+  });
+});
+
+describe("renewing a hold after a missed upfront capture", () => {
+  it("renews the materials too, since they were never charged", async () => {
+    setUp({ demoMode: true });
+    t.paypal.captureAuthorization.mockRejectedValueOnce(
+      Object.assign(new Error("INTERNAL_SERVER_ERROR"), { statusCode: 500 }),
+    );
+    await fundWithPayPalWallet();
+    t.service.advanceClock(projectId, 3);
+    const milestone = t.milestone(projectId, 1);
+
+    await t.service.reauthorize(projectId, ms1);
+
+    expect(t.paypal.reauthorize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amountCents: milestone.upfrontCents + milestone.heldCents,
+      }),
+    );
   });
 });

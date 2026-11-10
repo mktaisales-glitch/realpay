@@ -63,8 +63,6 @@ info:
   license:
     name: See LICENSE in the repository
 servers:
-  - url: http://localhost:4510
-    description: Local demo server (DEMO_MODE=true)
   - url: http://localhost:8080
     description: Local server, default PORT
 tags:

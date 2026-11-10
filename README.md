@@ -19,13 +19,17 @@ straight to the contractor.
 
 ![A project page: the money summary and the schedule, with two milestones funded and their labour on hold, authorized on the homeowner's PayPal](docs/screenshot.png)
 
-## Try it in two minutes
+## Try it locally
 
 ```bash
 # in a clone of this repository
-cp .env.sample .env        # add your sandbox REST app keys
+cp .env.sample .env        # see "Run it yourself" for what to fill in
 cd server/node && npm install && npm start
 ```
+
+`.env` needs your sandbox REST app keys, the two sandbox accounts that
+receive payouts (`SUPPLIER_EMAIL`, `CONTRACTOR_EMAIL`) and, for the test-card
+button, a sandbox card in `DEMO_TEST_CARD` as `<number>|<YYYY-MM>`.
 
 Open <http://localhost:8080>, pick **Home renovation**, then:
 
@@ -57,7 +61,7 @@ authorization on the money.
 | Where the money sits | With a third party that holds it     | On the homeowner's PayPal, authorized but not charged         |
 | What releases it     | Both sides agree, or a manual review | Proof checked against a written checklist, a person on doubt  |
 | Materials            | Usually locked with everything else  | Paid upfront to the supplier, so the work can start           |
-| If the work stops    | A dispute, and the money waits       | Cancel the milestone: the hold is voided, nothing was charged |
+| If the work stops    | A dispute, and the money waits       | Cancel the milestone: the labour hold is voided, never charged |
 
 ## How the money moves
 
@@ -160,6 +164,8 @@ Adding a niche means adding a file. The engine does not change.
 | AI unsure or unavailable           | Sent to the homeowner for review                    |
 | Homeowner rejects the proof        | Contractor can submit new proof, funds stay on hold |
 | Supplier payout fails              | Retry with the same batch id, no double payment     |
+| PayPal does not answer a payout    | Marked unconfirmed; retrying resolves it, same id   |
+| Capture left pending by PayPal     | Nothing paid out until PayPal confirms the capture  |
 | Authorization about to expire      | Homeowner reauthorizes the part on hold             |
 | Authorization expired              | Nothing captured; cancel and fund again             |
 | Project cancelled mid-way          | Unreleased holds are voided, never charged          |
@@ -264,9 +270,32 @@ step and no TypeScript tooling.
 ### Webhooks
 
 Point a sandbox webhook at `https://<your-host>/paypal-api/webhooks`,
-subscribe to `PAYMENT.PAYOUTSBATCH.*`, `PAYMENT.PAYOUTS-ITEM.*` and
-`CUSTOMER.DISPUTE.*`, and put its id in `PAYPAL_WEBHOOK_ID`. Events are
-verified with PayPal before they can change anything.
+subscribe to `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.DENIED`,
+`PAYMENT.CAPTURE.DECLINED`, `PAYMENT.PAYOUTSBATCH.*`,
+`PAYMENT.PAYOUTS-ITEM.*` and `CUSTOMER.DISPUTE.*`, and put its id in
+`PAYPAL_WEBHOOK_ID`. Events are verified with PayPal before they can change
+anything.
+
+A payout event for a payout RealPay has not stored yet gets a `503`, so
+PayPal delivers it again a little later instead of it being lost. A capture
+that PayPal leaves `PENDING` holds its payout as "waiting for PayPal to clear
+the payment" until `PAYMENT.CAPTURE.COMPLETED` arrives; `DENIED` stops it.
+
+### Payout states
+
+Next to PayPal's own statuses (`SUCCESS`, `PENDING`, `UNCLAIMED`…), RealPay
+keeps four of its own, because a failed request is not a failed payout:
+
+| State            | Meaning                                         | Retry |
+| ---------------- | ----------------------------------------------- | ----- |
+| `FAILED`         | PayPal refused it (4xx): nothing was sent       | Yes   |
+| `UNKNOWN`        | Timeout or 5xx: it may exist, same batch id     | Yes   |
+| `AWAITING_FUNDS` | The capture is pending at PayPal                | No    |
+| `BLOCKED`        | PayPal denied the pending capture               | No    |
+
+Retries reuse the `sender_batch_id`, which PayPal deduplicates, so a retry
+never pays twice. A retention refund is refused while its payout is
+`UNKNOWN`, since the contractor may already have it.
 
 Behind a reverse proxy (Render, Fly, a load balancer), set `TRUST_PROXY=1`
 so rate limits see the real client address. Leave it at `0` otherwise: a
@@ -275,9 +304,9 @@ client could fake its address with `X-Forwarded-For`.
 ## Path to production
 
 The sandbox build uses the Payouts API as a stand-in to pay the supplier
-and the contractor from the platform's account. RealPay is not an escrow
-service and does not hold anyone's money. The labour part is a PayPal
-authorization: the buyer's funds are reserved, not charged. A production
+and the contractor from the platform's account, so here the money does pass
+through it. RealPay is not meant to be an escrow service. The labour part is
+a PayPal authorization: the buyer's funds are reserved, not charged. A production
 version would onboard each contractor and supplier as a seller with
 [PayPal Multiparty](https://developer.paypal.com/docs/multiparty/) and
 capture straight to them, with the platform fee taken at capture. The

@@ -1,6 +1,8 @@
 # Render Blueprint for the public RealPay demo (PayPal sandbox only).
 # Free plan: no persistent disk, so the SQLite file and uploads reset on each
-# deploy or restart. That is fine for a demo; use a paid disk for anything else.
+# deploy or restart, and the service sleeps after 15 idle minutes (the first
+# request then takes up to a minute). That is fine for a demo; use a paid plan
+# and disk for anything else.
 services:
   - type: web
     name: realpay
@@ -31,5 +33,6 @@ services:
         sync: false
       - key: OPENROUTER_API_KEY
         sync: false
-      - key: PUBLIC_BASE_URL
+      # A sandbox test card for the demo button: <number>|<YYYY-MM>
+      - key: DEMO_TEST_CARD
         sync: false

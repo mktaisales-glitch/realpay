@@ -19,6 +19,10 @@ import {
   isHoldExpired,
   reauthorizeHistory,
 } from "./reauthorization.ts";
+import {
+  RETRYABLE_PAYOUT_STATUSES,
+  UNCONFIRMED_PAYOUT_STATUSES,
+} from "./payoutStatus.ts";
 import { daysBetween } from "./schedule.ts";
 
 /* ######################################################################
@@ -163,7 +167,12 @@ export function buildProjectView(
     const supplierPayout = payouts.find((payout) => payout.kind === "supplier");
     // Captured from the homeowner is not the same as paid to the supplier:
     // a failed payout stays with the platform until it is retried.
-    if (milestone.upfrontCaptureId && supplierPayout?.status !== "FAILED")
+    if (
+      milestone.upfrontCaptureId &&
+      (milestone.upfrontCents === 0 ||
+        (supplierPayout !== undefined &&
+          !UNCONFIRMED_PAYOUT_STATUSES.has(supplierPayout.status)))
+    )
       totals.upfrontPaidCents += milestone.upfrontCents;
     if (milestone.heldCaptureId) {
       totals.releasedCents +=
@@ -275,7 +284,7 @@ export function buildProjectView(
         upfrontPending,
         failedPayout: payouts.some(
           (payout) =>
-            payout.status === "FAILED" &&
+            RETRYABLE_PAYOUT_STATUSES.has(payout.status) &&
             (payout.kind !== "retention" ||
               (milestone.status === "RELEASED" &&
                 milestone.retentionStatus === "held")),

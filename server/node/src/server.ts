@@ -59,6 +59,16 @@ const service = createMilestoneService({
 
 const app = createApp({ config, db, service, templates });
 
-app.listen(config.PORT, () => {
+const server = app.listen(config.PORT, () => {
   console.log(`RealPay listening at http://localhost:${config.PORT}/`);
 });
+
+// Containers stop with SIGTERM: finish open requests, then close SQLite.
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.once(signal, () => {
+    server.close(() => {
+      db.close();
+      process.exit(0);
+    });
+  });
+}

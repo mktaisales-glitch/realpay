@@ -44,6 +44,8 @@ export type AuthorizationResult = {
   status: string;
   expiresAt: string | null;
   amountCents: number;
+  /** Omitted when PayPal's response did not carry an amount. */
+  currencyCode?: string;
   processorResponseCode: string | null;
 };
 
@@ -126,6 +128,7 @@ function toAuthorizationResult(
     amountCents: authorization?.amount
       ? fromPayPalValue(authorization.amount.value)
       : 0,
+    currencyCode: authorization?.amount?.currencyCode,
     processorResponseCode:
       authorization?.processorResponse?.responseCode ?? null,
   };
@@ -172,7 +175,7 @@ export function createPayPalGateway(
                 brandName: "RealPay",
                 shippingPreference:
                   PaypalWalletContextShippingPreference.NoShipping,
-                userAction: PaypalExperienceUserAction.Continue,
+                userAction: PaypalExperienceUserAction.PayNow,
               },
             },
           },

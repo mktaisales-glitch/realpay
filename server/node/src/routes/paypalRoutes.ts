@@ -97,18 +97,34 @@ export function createPayPalRouter({
       request.body ?? {},
       (request as RawBodyRequest).rawBody,
     );
+    const eventType = String(request.body?.event_type ?? "");
+    // A payout event we cannot match yet may belong to a payout whose row is
+    // still being written. 503 makes PayPal redeliver it instead of dropping it.
+    if (
+      !result.handled &&
+      !result.duplicate &&
+      eventType.startsWith("PAYMENT.PAYOUTS")
+    ) {
+      response.status(503).json(result);
+      return;
+    }
     response.json(result);
   }
+
+  // Order calls reach PayPal: keeps a script from hammering it.
+  const paypalLimiter = jsonRateLimit(60 * 1000, 30);
 
   router.get("/auth/browser-safe-client-id", browserSafeClientIdRouteHandler);
   router.post(
     "/checkout/orders/create-order-for-milestone",
     requireRole(db, "owner"),
+    paypalLimiter,
     createOrderForMilestoneRouteHandler,
   );
   router.post(
     "/checkout/orders/:orderId/authorize",
     requireRole(db, "owner"),
+    paypalLimiter,
     authorizeOrderRouteHandler,
   );
   // PayPal retries with backoff, far below this; the limit only stops a

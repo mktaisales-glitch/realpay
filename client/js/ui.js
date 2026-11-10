@@ -8,19 +8,31 @@
  * @param {"info" | "ok" | "error"} [kind]
  */
 export function toast(message, kind = "info") {
-  let host = document.querySelector(".toasts");
+  // Errors go to an assertive region and stay until closed; the rest fade.
+  const isError = kind === "error";
+  const selector = isError ? ".toasts-alert" : ".toasts-status";
+  let host = document.querySelector(selector);
   if (!host) {
     host = document.createElement("div");
-    host.className = "toasts";
-    host.setAttribute("role", "status");
-    host.setAttribute("aria-live", "polite");
+    host.className = `toasts ${selector.slice(1)}`;
+    host.setAttribute("role", isError ? "alert" : "status");
     document.body.append(host);
   }
   const item = document.createElement("div");
   item.className = `toast toast-${kind}`;
   item.textContent = message;
+  if (isError) {
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "toast-close";
+    close.setAttribute("aria-label", "Dismiss");
+    close.textContent = "×";
+    close.addEventListener("click", () => item.remove());
+    item.append(close);
+  } else {
+    setTimeout(() => item.remove(), 4500);
+  }
   host.append(item);
-  setTimeout(() => item.remove(), kind === "error" ? 7000 : 4500);
 }
 
 /**

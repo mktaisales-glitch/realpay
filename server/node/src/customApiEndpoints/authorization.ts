@@ -62,8 +62,13 @@ async function requestAccessToken({
   return result.access_token;
 }
 
+/** Drops a cached token PayPal no longer accepts. */
+export function forgetAccessToken(clientId: string): void {
+  tokenCache.delete(clientId);
+}
+
 /** PayPal answers JSON; a proxy or outage page may not. */
-async function parseJson(response: Response): Promise<unknown> {
+export async function parseJson(response: Response): Promise<unknown> {
   const text = await response.text();
   if (!text) {
     return {};
@@ -110,7 +115,7 @@ export async function callPayPalApi<T>(
   let response = await send();
   if (response.status === 401) {
     // The cached token was revoked or expired early: get a new one once.
-    tokenCache.delete(credentials.clientId);
+    forgetAccessToken(credentials.clientId);
     response = await send();
   }
   const result = await parseJson(response);

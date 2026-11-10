@@ -4,7 +4,6 @@ import {
   FLAG_LABELS,
   LEDGER_LABELS,
   PAYOUT_LABELS,
-  STATUS_LABELS,
   formatBytes,
   formatCents,
   formatDateTime,
@@ -243,7 +242,7 @@ function schedule(view) {
   return html`<div class="gantt">
     ${ganttSvg(view.milestones, view.today)}
     <div class="legend">
-      <span><i style="border:1.5px dashed var(--ink-3)"></i>Planned</span>
+      <span><i style="border:1.5px dashed var(--ink-3)"></i>Agreed dates</span>
       <span><i style="background:var(--held)"></i>On hold</span>
       <span><i style="background:var(--ok)"></i>Released</span>
       <span><i style="background:var(--ink-3)"></i>Not funded</span>
@@ -267,6 +266,32 @@ const PAYOUT_STATUS = {
     tone: "state-held",
   },
   FAILED: { text: "Failed", tone: "state-bad" },
+  UNKNOWN: { text: "Checking with PayPal", tone: "state-held" },
+  AWAITING_FUNDS: {
+    text: "Waiting for PayPal to clear the payment",
+    tone: "state-held",
+  },
+  BLOCKED: { text: "Stopped: PayPal denied the payment", tone: "state-bad" },
+};
+
+/** Payouts a person can safely send again (same batch id, no double pay). */
+const RETRYABLE = new Set(["FAILED", "UNKNOWN"]);
+
+/** The supplier's share was charged but has not reached them yet. */
+const UPFRONT_UNCONFIRMED = {
+  FAILED: html`<span class="state state-bad"
+    >⚠ Captured · supplier payout failed, retry below</span
+  >`,
+  UNKNOWN: html`<span class="state state-held"
+    >● Captured · PayPal has not confirmed the supplier payout, retry
+    below</span
+  >`,
+  AWAITING_FUNDS: html`<span class="state state-held"
+    >● Waiting for PayPal to clear the payment before paying the supplier</span
+  >`,
+  BLOCKED: html`<span class="state state-bad"
+    >⚠ PayPal denied the payment · nothing was paid out</span
+  >`,
 };
 
 /* ---------- view: milestone card ---------- */
@@ -280,10 +305,8 @@ function splitBlock(milestone) {
     upfrontState = html`<span class="state state-pending"
       >Nothing up front</span
     >`;
-  else if (upfront.paid && upfront.payoutStatus === "FAILED")
-    upfrontState = html`<span class="state state-bad"
-      >⚠ Captured · supplier payout failed, retry below</span
-    >`;
+  else if (UPFRONT_UNCONFIRMED[upfront.payoutStatus])
+    upfrontState = UPFRONT_UNCONFIRMED[upfront.payoutStatus];
   else if (
     upfront.paid &&
     upfront.payoutStatus &&
@@ -327,7 +350,7 @@ function splitBlock(milestone) {
   </div>`;
 }
 
-function metaRow(milestone) {
+function metaRow(milestone, view) {
   const { schedule: s, authorization, retention, proofType } = milestone;
   const items = [
     html`<span
@@ -375,7 +398,12 @@ function metaRow(milestone) {
   if (retention.status === "paid")
     items.push(html`<span class="state-ok">✓ Retention paid</span>`);
   if (retention.status === "refunded")
-    items.push(html`<span>↩ Retention refunded to you</span>`);
+    items.push(
+      html`<span
+        >↩ Retention refunded to
+        ${view.role === "owner" ? "you" : view.ownerName} for a defect</span
+      >`,
+    );
   return html`<div class="meta-row">${items}</div>`;
 }
 
@@ -403,7 +431,8 @@ function fundPanel(milestone, view) {
         currency-code="EUR"
       ></paypal-message>
       <p class="small muted" data-paypal-fallback hidden>
-        PayPal checkout could not load here. Use the sandbox card below.
+        PayPal checkout could not load here.
+        ${view.demoMode ? "Use the sandbox card below." : "Reload the page to try again."}
       </p>
     </div>
     ${
@@ -463,11 +492,10 @@ function uploadPanel(milestone) {
       <span class="small" data-file-name>or drop it here · max 8 MB</span>
       <input type="file" name="file" accept="${accept}" required />
     </label>
-    <textarea
-      name="note"
-      maxlength="500"
-      placeholder="Optional note for the homeowner"
-    ></textarea>
+    <label class="field-label">
+      Note for the homeowner (optional)
+      <textarea name="note" maxlength="500"></textarea>
+    </label>
     <div class="btn-row">
       <button type="submit" class="btn btn-primary">Submit proof</button>
     </div>
@@ -701,7 +729,7 @@ const ACTION_BUTTONS = {
     </button>`,
   retryPayout: (m) =>
     m.payouts
-      .filter((payout) => payout.status === "FAILED")
+      .filter((payout) => RETRYABLE.has(payout.status))
       .map(
         (payout) =>
           html`<button
@@ -744,9 +772,7 @@ function milestoneCard(milestone, view) {
       </span>
       <span class="ms-right">
         <span class="milestone-amount">${milestone.amount.display}</span>
-        <span class="pill pill-${milestone.status.toLowerCase()}"
-          >${STATUS_LABELS[milestone.status] ?? milestone.status}</span
-        >
+        <span class="pill pill-${where.key}">${where.label}</span>
       </span>
       <span class="chev" aria-hidden="true"></span>
     </summary>
@@ -798,7 +824,7 @@ function milestoneCard(milestone, view) {
           Payment split, dates${uploading ? "" : " and checklist"}
         </summary>
         <div class="fold-stack">
-          ${splitBlock(milestone)} ${metaRow(milestone)}
+          ${splitBlock(milestone)} ${metaRow(milestone, view)}
           ${uploading ? "" : checklist(milestone)}
         </div>
       </details>
