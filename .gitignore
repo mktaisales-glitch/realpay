@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.sample
+*.db
+*.db-*
+server/node/data/
+uploads/
+.DS_Store

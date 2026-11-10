@@ -1,0 +1,35 @@
+{
+  "id": "rental",
+  "name": "Holiday rental booking",
+  "description": "A first-time booking with an unknown host. The guest's money is authorized, but the host is paid only once the keys and the apartment are proven to match the listing.",
+  "defaultTitle": "Two-week stay, Valencia",
+  "proofRole": "Host",
+  "retention": { "basisPoints": 500, "days": 14 },
+  "governance": { "autoReleaseMaxEur": 900, "minConfidence": 0.8 },
+  "site": { "lat": 39.4699, "lng": -0.3763, "radiusMeters": 300 },
+  "milestones": [
+    {
+      "title": "Check-in: keys handed over",
+      "durationDays": 1,
+      "proofType": "photo",
+      "upfront": { "label": "Cleaning fee", "eur": 60 },
+      "held": { "label": "First week", "eur": 540 },
+      "checklist": [
+        "The apartment entrance or door is visible",
+        "Keys are shown in the photo",
+        "The interior matches a furnished, habitable apartment"
+      ]
+    },
+    {
+      "title": "Mid-stay: apartment as listed",
+      "durationDays": 7,
+      "proofType": "photo",
+      "upfront": { "label": "Linen change", "eur": 0 },
+      "held": { "label": "Second week", "eur": 540 },
+      "checklist": [
+        "Living area and bedroom are furnished",
+        "The apartment is clean and in good condition"
+      ]
+    }
+  ]
+}

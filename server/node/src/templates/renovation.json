@@ -1,0 +1,60 @@
+{
+  "id": "renovation",
+  "name": "Home renovation",
+  "description": "A bathroom renovation paid like a bank construction loan: materials go straight to the supplier, labour is held until the work is proven, and 5% stays back as a warranty.",
+  "defaultTitle": "Bathroom renovation, Barcelona",
+  "proofRole": "Contractor",
+  "retention": { "basisPoints": 500, "days": 30 },
+  "governance": { "autoReleaseMaxEur": 650, "minConfidence": 0.8 },
+  "site": { "lat": 41.3874, "lng": 2.1686, "radiusMeters": 500 },
+  "milestones": [
+    {
+      "title": "Demolition and strip-out",
+      "durationDays": 3,
+      "proofType": "photo",
+      "upfront": { "label": "Skip hire and protection", "eur": 150 },
+      "held": { "label": "Demolition labour", "eur": 450 },
+      "checklist": [
+        "Old tiles and sanitary fixtures are removed",
+        "Debris is cleared from the room",
+        "Walls and floor are stripped back to the substrate"
+      ]
+    },
+    {
+      "title": "Plumbing and electrics rough-in",
+      "durationDays": 5,
+      "proofType": "photo",
+      "upfront": { "label": "Pipes, cables and boxes", "eur": 400 },
+      "held": { "label": "Installation labour", "eur": 600 },
+      "checklist": [
+        "New water pipes are installed and visible before closing the walls",
+        "Electrical conduits and junction boxes are fitted",
+        "No visible leaks or loose open cables"
+      ]
+    },
+    {
+      "title": "Electrical installation certificate",
+      "durationDays": 1,
+      "proofType": "document",
+      "upfront": { "label": "Certification fee", "eur": 0 },
+      "held": { "label": "Certified electrician sign-off", "eur": 300 },
+      "checklist": [
+        "Document is an electrical installation certificate",
+        "It is signed or stamped by a registered installer",
+        "The installation address is stated on the document"
+      ]
+    },
+    {
+      "title": "Tiling and finishes",
+      "durationDays": 6,
+      "proofType": "photo",
+      "upfront": { "label": "Tiles, grout and fixtures", "eur": 500 },
+      "held": { "label": "Tiling and finishing labour", "eur": 700 },
+      "checklist": [
+        "Walls and floor are fully tiled",
+        "Grout lines are finished with no visible gaps",
+        "Toilet, basin and shower fixtures are installed"
+      ]
+    }
+  ]
+}
