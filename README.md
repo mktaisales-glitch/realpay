@@ -25,8 +25,8 @@ everything at the end protects the client. Neither works.
 
 Banks solved this long ago for construction loans: the money is released
 in stages, each one after an inspector signs off the work. RealPay brings
-that discipline to a €3,000 bathroom, with an AI inspector and PayPal
-holding the funds.
+that discipline to a €3,000 bathroom, with an AI inspector and a PayPal
+authorization on the money.
 
 ## How the money moves
 
@@ -217,11 +217,31 @@ client could fake its address with `X-Forwarded-For`.
 
 The sandbox build uses the Payouts API as a stand-in to pay the supplier
 and the contractor from the platform's account. RealPay is not an escrow
-service: the money is either held by a PayPal authorization or already
-paid out. A production version would onboard each contractor and supplier
-as a seller with [PayPal Multiparty](https://developer.paypal.com/docs/multiparty/)
-and capture straight to them, with the platform fee taken at capture. The
+service and does not hold anyone's money. The labour part is a PayPal
+authorization: the buyer's funds are reserved, not charged. A production
+version would onboard each contractor and supplier as a seller with
+[PayPal Multiparty](https://developer.paypal.com/docs/multiparty/) and
+capture straight to them, with the platform fee taken at capture. The
 engine does not change: only the gateway's capture and payout calls do.
+
+Known limits, stated plainly:
+
+- PayPal guarantees authorized funds only for the 3-day honor period. A
+  capture later in the 29-day window can still fail if the buyer's balance
+  or card changed. RealPay then reports PayPal's error and nothing is
+  released or paid out.
+- In this sandbox build the 5% retention is captured into the platform
+  account for 30 days. Holding captured third-party money is not something
+  a production build should do. There, the retention becomes a delayed
+  disbursement to the contractor's Multiparty seller account (PayPal
+  supports payment holds there), so the platform never holds it.
+- The fee totals count PayPal capture fees only. Payout fees, and the
+  capture fee that is not returned on a retention refund, are not tracked
+  in sandbox.
+- A contractor who disagrees with a retention refund has PayPal's own
+  dispute process as recourse. The owner's reason is kept in the ledger.
+- Card-funded holds cannot be renewed: a milestone paid by card has 29 days
+  to be proven. Wallet-funded holds can be renewed once.
 
 ## Tests and checks
 

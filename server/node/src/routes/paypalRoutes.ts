@@ -7,6 +7,9 @@ import type { MilestoneService } from "../domain/milestoneService.ts";
 import { requireRole } from "../middleware/capabilityAuth.ts";
 import { jsonRateLimit } from "../middleware/rateLimit.ts";
 
+/** A request whose JSON body bytes were kept by the body parser. */
+export type RawBodyRequest = Request & { rawBody?: string };
+
 /* ######################################################################
  * PayPal endpoints, named and shaped like the PayPal integration samples:
  * the browser asks for a client id, creates an order, then asks the
@@ -92,6 +95,7 @@ export function createPayPalRouter({
         transmissionTime: request.get("paypal-transmission-time"),
       },
       request.body ?? {},
+      (request as RawBodyRequest).rawBody,
     );
     response.json(result);
   }

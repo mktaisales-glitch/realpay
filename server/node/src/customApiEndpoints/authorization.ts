@@ -10,16 +10,31 @@ type Credentials = { clientId: string; clientSecret: string };
 type CachedToken = { accessToken: string; expiresAt: number };
 
 const tokenCache = new Map<string, CachedToken>();
+// One token request at a time per client: concurrent callers share it.
+const tokenRequests = new Map<string, Promise<string>>();
 
-export async function getFullScopeAccessToken({
-  clientId,
-  clientSecret,
-}: Credentials): Promise<string> {
+export async function getFullScopeAccessToken(
+  credentials: Credentials,
+): Promise<string> {
+  const { clientId } = credentials;
   const cached = tokenCache.get(clientId);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.accessToken;
   }
+  let pending = tokenRequests.get(clientId);
+  if (!pending) {
+    pending = requestAccessToken(credentials).finally(() =>
+      tokenRequests.delete(clientId),
+    );
+    tokenRequests.set(clientId, pending);
+  }
+  return pending;
+}
 
+async function requestAccessToken({
+  clientId,
+  clientSecret,
+}: Credentials): Promise<string> {
   const response = await fetch(`${PAYPAL_API_BASE_URL}/v1/oauth2/token`, {
     method: "POST",
     headers: {
@@ -28,7 +43,7 @@ export async function getFullScopeAccessToken({
     },
     body: new URLSearchParams({ grant_type: "client_credentials" }),
   });
-  const result = (await response.json()) as {
+  const result = (await parseJson(response)) as {
     access_token?: string;
     expires_in?: number;
   };
@@ -47,36 +62,58 @@ export async function getFullScopeAccessToken({
   return result.access_token;
 }
 
+/** PayPal answers JSON; a proxy or outage page may not. */
+async function parseJson(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text) {
+    return {};
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return { message: text.slice(0, 200) };
+  }
+}
+
 export async function callPayPalApi<T>(
   credentials: Credentials,
   {
     method,
     path,
     body,
+    rawBody,
     requestId,
   }: {
     method: "GET" | "POST";
     path: string;
     body?: unknown;
+    /** A body already serialised, sent byte for byte. */
+    rawBody?: string;
     requestId?: string;
   },
 ): Promise<T> {
-  const accessToken = await getFullScopeAccessToken(credentials);
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${accessToken}`,
-    "Content-Type": "application/json",
+  const send = async () => {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${await getFullScopeAccessToken(credentials)}`,
+      "Content-Type": "application/json",
+    };
+    if (requestId) {
+      headers["PayPal-Request-Id"] = requestId;
+    }
+    return fetch(`${PAYPAL_API_BASE_URL}${path}`, {
+      method,
+      headers,
+      body: rawBody ?? (body === undefined ? undefined : JSON.stringify(body)),
+    });
   };
-  if (requestId) {
-    headers["PayPal-Request-Id"] = requestId;
-  }
 
-  const response = await fetch(`${PAYPAL_API_BASE_URL}${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await response.text();
-  const result: unknown = text ? JSON.parse(text) : {};
+  let response = await send();
+  if (response.status === 401) {
+    // The cached token was revoked or expired early: get a new one once.
+    tokenCache.delete(credentials.clientId);
+    response = await send();
+  }
+  const result = await parseJson(response);
   if (!response.ok) {
     throw new CustomApiError(
       `PayPal ${method} ${path} failed`,

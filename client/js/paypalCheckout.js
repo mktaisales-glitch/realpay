@@ -2,7 +2,7 @@ import { api } from "./api.js";
 
 /* ######################################################################
  * PayPal JS SDK v6 for milestone funding. Each milestone is its own
- * AUTHORIZE order: the buyer approves once and PayPal holds the money
+ * AUTHORIZE order: the buyer approves once and PayPal authorizes the funds
  * until the work is proven. Pay Later is shown only when PayPal says the
  * buyer is eligible for it.
  * ###################################################################### */

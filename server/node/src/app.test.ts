@@ -412,6 +412,24 @@ describe("PayPal webhook endpoint", () => {
     expect(paypal.verifyWebhook).toHaveBeenCalledWith(
       expect.objectContaining({ transmissionId: "tx-1" }),
       expect.objectContaining({ id: "WH-1" }),
+      expect.any(String),
+    );
+  });
+
+  it("hands PayPal the exact bytes it sent, not a re-serialised copy", async () => {
+    const { app, paypal } = setUp();
+    paypal.verifyWebhook.mockResolvedValueOnce(false);
+    const raw = String.raw`{"id":"WH-2", "event_type":"PAYMENT.X","resource":{"amount":1.10,"note":"caf\u00e9"}}`;
+
+    await request(app)
+      .post("/paypal-api/webhooks")
+      .set("Content-Type", "application/json")
+      .send(raw);
+
+    expect(paypal.verifyWebhook).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ id: "WH-2" }),
+      raw,
     );
   });
 

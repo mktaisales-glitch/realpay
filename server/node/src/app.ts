@@ -13,7 +13,10 @@ import type { Db } from "./db/database.ts";
 import type { MilestoneService } from "./domain/milestoneService.ts";
 import type { Template } from "./domain/templates.ts";
 import errorMiddleware from "./middleware/errorMiddleware.ts";
-import { createPayPalRouter } from "./routes/paypalRoutes.ts";
+import {
+  createPayPalRouter,
+  type RawBodyRequest,
+} from "./routes/paypalRoutes.ts";
 import { createProjectRouter } from "./routes/projectRoutes.ts";
 
 /* ######################################################################
@@ -78,7 +81,15 @@ export function createApp({ config, db, service, templates }: AppDependencies) {
     }),
   );
   // Same-origin only: no CORS headers, so other sites cannot call the API.
-  app.use(express.json({ limit: "64kb" }));
+  // The raw bytes are kept for PayPal webhook signature checks.
+  app.use(
+    express.json({
+      limit: "64kb",
+      verify: (request, _response, buffer) => {
+        (request as RawBodyRequest).rawBody = buffer.toString("utf8");
+      },
+    }),
+  );
 
   /* ######################################################################
    * API

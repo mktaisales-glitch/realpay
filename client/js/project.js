@@ -131,7 +131,7 @@ function totals(view) {
   return html`<dl class="card totals">
     ${cell("", "Project value", t.total)}
     ${cell("", "Paid to suppliers", t.upfrontPaid)}
-    ${cell("held", "Held by PayPal", t.held)}
+    ${cell("held", "Authorized, not charged", t.held)}
     ${cell("released", "Released to contractor", t.released)}
     ${cell("", `Retention (${g.retentionPercent}%)`, t.retention)}
     ${cell("", "PayPal fees", t.fees)}
@@ -180,7 +180,7 @@ function splitBlock(milestone) {
     upfrontState = html`<span class="state state-ok">✓ Paid to supplier</span>`;
 
   let heldState = html`<span class="state state-pending"
-    >Held by PayPal once funded</span
+    >Authorized with PayPal once funded</span
   >`;
   if (held.released)
     heldState = html`<span class="state state-ok"
@@ -188,7 +188,7 @@ function splitBlock(milestone) {
     >`;
   else if (status === "FUNDED" || status === "IN_REVIEW")
     heldState = html`<span class="state state-held"
-      >● Held by PayPal until the work is proven</span
+      >● Authorized with PayPal, not charged until the work is proven</span
     >`;
   else if (status === "CANCELLED")
     heldState = html`<span class="state state-pending"
@@ -799,7 +799,7 @@ function afterRender() {
           },
         );
         toast(
-          "Funds are held by PayPal. The supplier payment is on its way.",
+          "PayPal authorized the labour; nothing is charged yet. The supplier payment is on its way.",
           "ok",
         );
         show(await fetchView());
@@ -920,7 +920,7 @@ async function handleAction(button) {
           scenario: button.dataset.scenario,
         });
         toast(
-          "Funds are held by PayPal. The supplier payment is on its way.",
+          "PayPal authorized the labour; nothing is charged yet. The supplier payment is on its way.",
           "ok",
         );
       } catch (error) {

@@ -921,6 +921,58 @@ describe("renewing a hold", () => {
   });
 });
 
+describe("PayPal webhook delivery", () => {
+  beforeEach(() => setUp());
+
+  it("does not use up the id of an event that matches nothing yet", async () => {
+    const event = {
+      id: "WH-early",
+      event_type: "PAYMENT.PAYOUTSBATCH.SUCCESS",
+      resource: {
+        batch_header: { payout_batch_id: "NOT-YET", batch_status: "SUCCESS" },
+      },
+    };
+
+    expect(await t.service.handleWebhook(webhookHeaders, event)).toEqual({
+      handled: false,
+      duplicate: false,
+    });
+    // PayPal's retry is processed, not dropped as a duplicate.
+    expect(await t.service.handleWebhook(webhookHeaders, event)).toEqual({
+      handled: false,
+      duplicate: false,
+    });
+    expect(
+      t.db.prepare("SELECT COUNT(*) AS n FROM webhook_events").get(),
+    ).toEqual({ n: 0 });
+  });
+
+  it("keeps a resolved dispute resolved when a late CREATED arrives", async () => {
+    await t.service.fundWithCard(projectId, ms2, APPROVED_CARD);
+    const captureId = t.milestone(projectId, 2).upfrontCaptureId;
+    const disputed = {
+      dispute_id: "PP-D-LATE",
+      status: "OPEN",
+      disputed_transactions: [{ seller_transaction_id: captureId }],
+    };
+
+    await t.service.handleWebhook(webhookHeaders, {
+      id: "WH-late-resolved",
+      event_type: "CUSTOMER.DISPUTE.RESOLVED",
+      resource: { ...disputed, status: "RESOLVED" },
+    });
+    const late = await t.service.handleWebhook(webhookHeaders, {
+      id: "WH-late-created",
+      event_type: "CUSTOMER.DISPUTE.CREATED",
+      resource: disputed,
+    });
+
+    expect(late.handled).toBe(true);
+    expect(t.milestone(projectId, 2).disputeStatus).toBe("RESOLVED");
+    expect(actions(ms2)).toContain("dispute_event_ignored");
+  });
+});
+
 describe("races with PayPal webhooks", () => {
   beforeEach(() => setUp());
 

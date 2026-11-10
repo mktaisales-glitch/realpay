@@ -94,7 +94,11 @@ export interface PaymentsGateway {
     amountCents: number;
     note: string;
   }): Promise<PayoutResult>;
-  verifyWebhook(headers: WebhookHeaders, event: unknown): Promise<boolean>;
+  verifyWebhook(
+    headers: WebhookHeaders,
+    event: unknown,
+    rawEvent?: string,
+  ): Promise<boolean>;
   provideDisputeEvidence(input: {
     disputeId: string;
     notes: string;
@@ -289,7 +293,7 @@ export function createPayPalGateway(
       };
     },
 
-    async verifyWebhook(headers, event) {
+    async verifyWebhook(headers, event, rawEvent) {
       if (!config.PAYPAL_WEBHOOK_ID) {
         return false;
       }
@@ -297,6 +301,7 @@ export function createPayPalGateway(
         headers,
         webhookId: config.PAYPAL_WEBHOOK_ID,
         webhookEvent: event,
+        rawEvent,
       });
     },
 

@@ -1386,11 +1386,24 @@ export function createMilestoneService(deps: ServiceDependencies) {
     return undefined;
   }
 
-  async function handleWebhook(headers: WebhookHeaders, event: WebhookEvent) {
-    const verified = await paypal.verifyWebhook(headers, event);
+  type WebhookResult = { handled: boolean; duplicate: boolean };
+
+  /** Thrown inside the webhook transaction to undo the event record. */
+  class UnmatchedEvent extends Error {}
+
+  /**
+   * Verify first, then record the event id and apply it in one transaction.
+   * An event that matches nothing here (for example a payout event that
+   * arrives before the payout row is written) is rolled back, so its id is
+   * not used up and PayPal's retry is processed normally.
+   */
+  async function handleWebhook(
+    headers: WebhookHeaders,
+    event: WebhookEvent,
+    rawEvent?: string,
+  ): Promise<WebhookResult> {
+    const verified = await paypal.verifyWebhook(headers, event, rawEvent);
     const eventId = event.id ?? "";
-    const eventType = event.event_type ?? "UNKNOWN";
-    const resource = event.resource ?? {};
     if (!verified || !eventId) {
       throw new DomainError(
         400,
@@ -1398,11 +1411,30 @@ export function createMilestoneService(deps: ServiceDependencies) {
         "PayPal could not verify this webhook signature.",
       );
     }
+    try {
+      return db.transaction(() => {
+        const result = applyWebhook(eventId, event);
+        if (!result.handled && !result.duplicate) {
+          throw new UnmatchedEvent();
+        }
+        return result;
+      })();
+    } catch (error) {
+      if (error instanceof UnmatchedEvent) {
+        return { handled: false, duplicate: false };
+      }
+      throw error;
+    }
+  }
+
+  function applyWebhook(eventId: string, event: WebhookEvent): WebhookResult {
+    const eventType = event.event_type ?? "UNKNOWN";
+    const resource = event.resource ?? {};
     const isNew = recordWebhookEvent(db, {
       id: eventId,
       eventType,
       resourceId: typeof resource.id === "string" ? resource.id : null,
-      verified,
+      verified: true,
       receivedAt: now().toISOString(),
     });
     if (!isNew) {
@@ -1485,6 +1517,19 @@ export function createMilestoneService(deps: ServiceDependencies) {
         eventType === "CUSTOMER.DISPUTE.RESOLVED"
           ? "RESOLVED"
           : String(resource.status ?? "OPEN");
+      // PayPal does not promise delivery order: a late CREATED or UPDATED
+      // must not reopen a dispute that is already resolved.
+      if (
+        status !== "RESOLVED" &&
+        milestone.disputeStatus === "RESOLVED" &&
+        milestone.disputeId === disputeId
+      ) {
+        ledger(project, milestone, "paypal", "dispute_event_ignored", {
+          paypalRef: disputeId,
+          detail: { eventType, status, webhookEventId: eventId },
+        });
+        return { handled: true, duplicate: false };
+      }
       updateMilestone(db, milestone.id, { disputeId, disputeStatus: status });
       ledger(
         project,

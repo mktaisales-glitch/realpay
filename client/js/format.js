@@ -118,6 +118,7 @@ export const LEDGER_LABELS = {
   dispute_updated: "Dispute updated",
   dispute_evidence_submitted: "Evidence pack sent",
   dispute_resolved: "Dispute resolved",
+  dispute_event_ignored: "Late dispute event ignored",
   paypal_event: "PayPal webhook received",
   demo_clock_advanced: "Demo clock moved forward",
 };
