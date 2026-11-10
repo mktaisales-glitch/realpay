@@ -8,7 +8,7 @@ import { escapeHtml, formatDay, raw } from "./format.js";
 
 const DAY_MS = 86_400_000;
 const ROW = 34;
-const LABEL_WIDTH = 210;
+const LABEL_WIDTH = 285;
 const CHART_WIDTH = 760;
 const TOP = 26;
 
@@ -62,7 +62,7 @@ export function ganttSvg(milestones, today) {
       (toDay(schedule.forecastEnd) + 1 - toDay(schedule.forecastStart)) * scale;
     const status = milestone.status.toLowerCase();
     const title = `${milestone.seq}. ${milestone.title}`;
-    const label = title.length > 30 ? `${title.slice(0, 29)}…` : title;
+    const label = title.length > 44 ? `${title.slice(0, 43)}…` : title;
     const slip =
       schedule.slipDays > 0
         ? `<text class="g-slip" x="${forecastX + forecastW + 6}" y="${y + 21}">+${schedule.slipDays}d</text>`

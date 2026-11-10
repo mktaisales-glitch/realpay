@@ -345,6 +345,15 @@ select {
   border-left: 4px solid var(--bad);
 }
 
+.story-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
 .story blockquote {
   margin: 0 0 10px;
   font-family: var(--font-display);
