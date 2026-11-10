@@ -89,6 +89,9 @@ export function createProjectRouter({
   });
   const createProjectLimiter = jsonRateLimit(60 * 60 * 1000, 30);
   const proofLimiter = jsonRateLimit(10 * 60 * 1000, 20);
+  // Every proof can cost one AI call from a shared free quota. A daily
+  // limit per client keeps one visitor from spending it for everyone.
+  const proofDailyLimiter = jsonRateLimit(24 * 60 * 60 * 1000, 25);
 
   /** Demo controls do not exist outside demo mode, whoever asks. */
   function demoOnly(
@@ -309,6 +312,7 @@ export function createProjectRouter({
     `${ms}/proofs`,
     contractor,
     proofLimiter,
+    proofDailyLimiter,
     upload.single("file"),
     submitProofRouteHandler,
   );

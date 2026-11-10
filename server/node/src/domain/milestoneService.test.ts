@@ -14,6 +14,7 @@ import {
   type TestService,
 } from "../testUtils.ts";
 import { DomainError } from "./domainError.ts";
+import { MAX_PROOFS_PER_MILESTONE } from "./milestoneService.ts";
 
 /* Every test gets a fresh in-memory database, fake PayPal and fake AI. */
 
@@ -374,6 +375,30 @@ describe("submitting proof of work", () => {
     expect(second.decision).toBe("reject");
     expect(second.reason).toContain("already submitted");
     expect(t.verifier.verify).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps no file for a proof the free checks rejected", async () => {
+    t.verifier.verify.mockResolvedValueOnce(aiOutcome(verdictOf(true, 0.5)));
+    await t.service.submitProof(projectId, ms1, upload("certificate"));
+    await t.service.submitProof(projectId, ms1, upload("certificate"));
+
+    const [first, duplicate] = listProofs(t.db, ms1);
+    expect(first?.storagePath).not.toBe("");
+    expect(duplicate?.flags.hard).toEqual(["duplicate_proof"]);
+    expect(duplicate?.storagePath).toBe("");
+  });
+
+  it(`stops taking proofs after ${MAX_PROOFS_PER_MILESTONE} on one milestone`, async () => {
+    for (let index = 0; index < MAX_PROOFS_PER_MILESTONE; index += 1) {
+      await t.service.submitProof(projectId, ms2, upload(`tiling-${index}`));
+    }
+
+    await expectDomainError(
+      t.service.submitProof(projectId, ms2, upload("one-more")),
+      409,
+      "PROOF_LIMIT_REACHED",
+    );
+    expect(listProofs(t.db, ms2)).toHaveLength(MAX_PROOFS_PER_MILESTONE);
   });
 
   it("lets the owner send a proof in review back to the contractor", async () => {

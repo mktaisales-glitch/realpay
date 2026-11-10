@@ -344,6 +344,16 @@ export function proofHashExists(
   return Boolean(row);
 }
 
+/** How many proofs a milestone has received, accepted or not. */
+export function countProofs(db: Db, milestoneId: string): number {
+  const row = db
+    .prepare<[string], { total: number }>(
+      "SELECT COUNT(*) AS total FROM proofs WHERE milestone_id = ?",
+    )
+    .get(milestoneId);
+  return row?.total ?? 0;
+}
+
 /** How many AI verdicts a project has asked for since `since` (ISO time). */
 export function countAiVerdictsSince(
   db: Db,

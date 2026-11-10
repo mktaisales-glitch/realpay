@@ -16,6 +16,7 @@ import type { WebhookHeaders } from "../customApiEndpoints/webhooks.ts";
 import type { Db } from "../db/database.ts";
 import {
   countAiVerdictsSince,
+  countProofs,
   findMilestoneByPayPalRef,
   findPayoutByBatch,
   getMilestone,
@@ -122,6 +123,9 @@ export type ProofOutcome = {
   reason: string;
   status: MilestoneStatus;
 };
+
+/** Enough for honest retries; stops one milestone from soaking up AI calls. */
+export const MAX_PROOFS_PER_MILESTONE = 8;
 
 const EXTENSIONS: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -885,6 +889,13 @@ export function createMilestoneService(deps: ServiceDependencies) {
     const { project, milestone } = requireMilestone(projectId, milestoneId);
     return withLock(milestone.id, async () => {
       requireStatus(milestone, ["FUNDED", "IN_REVIEW"], "submit proof for");
+      if (countProofs(db, milestone.id) >= MAX_PROOFS_PER_MILESTONE) {
+        throw new DomainError(
+          409,
+          "PROOF_LIMIT_REACHED",
+          `This milestone already has ${MAX_PROOFS_PER_MILESTONE} proofs. Ask the homeowner to review them, or open a dispute.`,
+        );
+      }
 
       const checks = await runPrechecks({
         bytes: upload.bytes,
@@ -905,7 +916,9 @@ export function createMilestoneService(deps: ServiceDependencies) {
 
       const proofId = newId("prf");
       let storagePath = "";
-      if (checks.mimeType) {
+      // A proof rejected by the free checks is never kept: only its hash
+      // and flags go to the ledger, so a bad upload costs no disk.
+      if (checks.mimeType && checks.hardFlags.length === 0) {
         mkdirSync(deps.uploadDir, { recursive: true });
         storagePath = path.join(
           deps.uploadDir,
