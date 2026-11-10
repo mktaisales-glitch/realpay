@@ -678,6 +678,23 @@ describe("snagging retention", () => {
 describe("payouts", () => {
   beforeEach(() => setUp());
 
+  it("keeps PayPal's error name when a payout is refused", async () => {
+    t.paypal.sendPayout.mockRejectedValueOnce(
+      Object.assign(new Error("PayPal POST /v1/payments/payouts failed"), {
+        result: { name: "INSUFFICIENT_FUNDS" },
+      }),
+    );
+    await t.service.fundWithCard(projectId, ms1, APPROVED_CARD);
+
+    const failed = listLedger(t.db, projectId).find(
+      (e) => e.action === "payout_failed",
+    );
+    expect(failed?.detail).toMatchObject({
+      kind: "supplier",
+      paypalError: "INSUFFICIENT_FUNDS",
+    });
+  });
+
   it("records a failed payout and retries it with the same batch id, so PayPal cannot pay twice", async () => {
     t.paypal.sendPayout.mockRejectedValueOnce(
       new Error("RECEIVER_UNREGISTERED"),

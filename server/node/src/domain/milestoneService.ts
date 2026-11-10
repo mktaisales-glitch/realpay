@@ -188,6 +188,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** PayPal's error name (e.g. INSUFFICIENT_FUNDS), when the API returned one. */
+function paypalErrorName(error: unknown): string | undefined {
+  const result = (error as { result?: { name?: unknown } } | null)?.result;
+  return typeof result?.name === "string" ? result.name : undefined;
+}
+
 function requireStatus(
   milestone: Milestone,
   allowed: MilestoneStatus[],
@@ -468,7 +474,12 @@ export function createMilestoneService(deps: ServiceDependencies) {
       });
       ledger(project, milestone, "system", "payout_failed", {
         amountCents,
-        detail: { kind, receiver, error: errorMessage(error) },
+        detail: {
+          kind,
+          receiver,
+          error: errorMessage(error),
+          paypalError: paypalErrorName(error),
+        },
       });
     }
     return getPayout(db, milestone.id, kind);
