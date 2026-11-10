@@ -36,6 +36,10 @@ No real money is ever involved, but reports are still taken seriously.
   10 minutes and 25 a day, 60 webhook calls a minute.
 - Per milestone: at most 8 proofs. After that the homeowner has to review
   them or open a dispute.
+- Extras: EUR 10 to EUR 2,000 each (or free), at most 50% of the original
+  contract in agreed extras, 20 waiting for an answer and 50 per project,
+  and 30 change-order actions an hour per client IP. No extra can be
+  proposed or accepted while a dispute is open.
 - AI calls: 10 per project a day and 150 for the whole instance, so a
   single link cannot drain the model quota.
 - Behind a reverse proxy, set `TRUST_PROXY` to the number of proxies
@@ -58,6 +62,20 @@ No real money is ever involved, but reports are still taken seriously.
   policy, not the model, decides what money moves. The AI can never
   release a document on its own, more than the template's cap, or
   anything during a dispute.
+- An extra's description is prompt text written by one of the parties:
+  once both agree, it becomes the checklist the AI inspector reads for
+  that milestone. On the way in, it is flattened to one line and stripped
+  of invisible format characters and `"""`, and a description that reads
+  as instructions to the inspector is refused
+  (`CHANGE_ORDER_LOOKS_LIKE_INSTRUCTIONS`). In the prompt, it sits inside
+  a fence labelled as scope agreed by the parties, not instructions, and
+  the milestone title made from the same text is left out. An extra is
+  never released automatically: the homeowner always signs it off.
+- The limits of that: the pattern check is a list of known phrasings,
+  and reworded instructions get through it. The other party also has to
+  accept the description, and it can only widen what the AI looks for in
+  that one extra, never move money on its own. The fence and the
+  sign-off are what is relied on, not the filter.
 
 **Browser**
 

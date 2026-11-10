@@ -842,9 +842,16 @@ paths:
       summary: Propose an extra (change order)
       description: |
         Either party proposes work that was not in the plan, with its price (`0` for a
-        free change that should still be on record). `requestedBy` records who asked for
-        the work and defaults to the proposer. The proposal is appended to the ledger
-        (`change_order_proposed`). At most 20 change orders per project.
+        free change that should still be on record, otherwise EUR 10 to EUR 2,000).
+        `requestedBy` records who asked for the work and defaults to the proposer. The
+        proposal is appended to the ledger (`change_order_proposed`).
+
+        The description is text written by one of the parties, and an accepted, priced
+        extra uses it as the AI inspector's checklist. So it is flattened to one line,
+        invisible format characters and `"""` are stripped, and a description that reads
+        as instructions to the inspector is refused. At most 20 extras can wait for an
+        answer at once, and a project records at most 50. Not allowed while a dispute is
+        open on the project.
       x-roles: [owner, contractor]
       requestBody:
         required: true
@@ -860,11 +867,27 @@ paths:
         "201":
           $ref: "#/components/responses/ProjectView"
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: |
+            `Bad Request`: the body is not valid (unknown fields are refused).
+            `INVALID_CHANGE_ORDER`: the description is under 3 or over 280 characters
+            once flattened, or the price is out of range.
+            `CHANGE_ORDER_TOO_SMALL`: a priced extra under EUR 10.
+            `CHANGE_ORDER_LOOKS_LIKE_INSTRUCTIONS`: the description reads as
+            instructions to the AI inspector.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: CHANGE_ORDER_TOO_SMALL
+                errorDescription: A priced extra costs at least €10.00. Use €0.00 to record a free change.
         "401":
           $ref: "#/components/responses/Unauthorized"
         "409":
-          description: "`TOO_MANY_CHANGE_ORDERS`: the project already has 20."
+          description: |
+            `TOO_MANY_OPEN_CHANGE_ORDERS`: 20 extras already wait for an answer.
+            `TOO_MANY_CHANGE_ORDERS`: the project already records 50.
+            `DISPUTE_OPEN`: a PayPal dispute is open on the project.
           content:
             application/json:
               schema:
@@ -883,9 +906,13 @@ paths:
       description: |
         Only the party that did NOT propose the extra can accept it. A priced extra becomes
         a new milestone at the end of the plan (`PLANNED`, nothing upfront, the whole price
-        held, photo proof, the description as its checklist), dated after the last
-        milestone; it is then funded and released like any other. A free extra is only
-        recorded. Appended to the ledger as `change_order_accepted`.
+        authorized on proof, photo proof, the description as its checklist), with a 3-day
+        window starting on the day it is accepted; it is then funded like any other, and
+        its release is always signed off by the homeowner, never automatic. A free extra
+        is only recorded. Agreed extras (cancelled ones aside) can add at most 50% of the
+        original contract. Appended to the ledger as `change_order_accepted`. If the
+        milestone is later cancelled, the change order is cancelled with it
+        (`change_order_cancelled`).
       x-roles: [owner, contractor]
       responses:
         "200":
@@ -904,7 +931,15 @@ paths:
         "404":
           $ref: "#/components/responses/ChangeOrderNotFound"
         "409":
-          $ref: "#/components/responses/ChangeOrderAlreadyDecided"
+          description: |
+            `CHANGE_ORDER_ALREADY_DECIDED`: it is no longer proposed.
+            `EXTRAS_OVER_LIMIT`: agreed extras would add more than 50% of the original
+            contract.
+            `DISPUTE_OPEN`: a PayPal dispute is open on the project.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "429":
           $ref: "#/components/responses/RateLimited"
 
@@ -931,6 +966,46 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/ChangeOrderNotFound"
+        "409":
+          description: |
+            `CHANGE_ORDER_ALREADY_DECIDED`: it is no longer proposed.
+            `DISPUTE_OPEN`: a PayPal dispute is open on the project.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /api/projects/{projectId}/change-orders/{changeOrderId}/withdraw:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/changeOrderId"
+    post:
+      tags: [Change orders]
+      operationId: withdrawChangeOrder
+      summary: Withdraw an extra you proposed
+      description: |
+        Only the party that proposed the extra can withdraw it, and only while nobody has
+        answered it. It stays on record as `withdrawn` (`change_order_withdrawn` in the
+        ledger) and can no longer be paid.
+      x-roles: [owner, contractor]
+      responses:
+        "200":
+          $ref: "#/components/responses/ProjectView"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: "`ONLY_PROPOSER_CAN_WITHDRAW`: the caller did not propose it. They can decline it instead."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: ONLY_PROPOSER_CAN_WITHDRAW
+                errorDescription: Only the contractor who proposed this extra can withdraw it. You can decline it.
         "404":
           $ref: "#/components/responses/ChangeOrderNotFound"
         "409":
@@ -1287,7 +1362,7 @@ components:
             error: CHANGE_ORDER_NOT_FOUND
             errorDescription: No change order with that id in this project.
     ChangeOrderAlreadyDecided:
-      description: "`CHANGE_ORDER_ALREADY_DECIDED`: it was already accepted or declined."
+      description: "`CHANGE_ORDER_ALREADY_DECIDED`: it is no longer proposed (accepted, declined, withdrawn or cancelled)."
       content:
         application/json:
           schema:
@@ -1815,12 +1890,15 @@ components:
           type: string
           minLength: 3
           maxLength: 280
-          description: What the extra work is. Flattened to one line; it becomes the checklist.
+          description: |
+            What the extra work is, written by one of the parties. Flattened to one line,
+            with invisible format characters and `"""` removed; it becomes the checklist
+            the AI inspector reads, so it must describe work, not give instructions.
         priceCents:
           type: integer
           minimum: 0
           maximum: 200000
-          description: Integer euro cents. `0` records a free change. Capped like a milestone.
+          description: Integer euro cents. `0` records a free change; otherwise at least `1000` (EUR 10). Capped like a milestone.
         requestedBy:
           type: string
           enum: [owner, contractor]
@@ -1842,6 +1920,7 @@ components:
           createdAt,
           decidedAt,
           canDecide,
+          canWithdraw,
         ]
       properties:
         id:
@@ -1863,11 +1942,12 @@ components:
           enum: [owner, contractor, null]
         status:
           type: string
-          enum: [proposed, accepted, declined]
+          enum: [proposed, accepted, declined, withdrawn, cancelled]
+          description: "`cancelled`: its milestone was cancelled, so it can no longer be paid."
         milestone:
           description: The milestone an accepted, priced extra became.
           type: [object, "null"]
-          required: [id, seq, title]
+          required: [id, seq, title, status]
           properties:
             id:
               type: string
@@ -1875,6 +1955,8 @@ components:
               type: integer
             title:
               type: string
+            status:
+              $ref: "#/components/schemas/MilestoneStatus"
         createdAt:
           type: string
           format: date-time
@@ -1884,6 +1966,9 @@ components:
         canDecide:
           type: boolean
           description: True when the caller may accept or decline it.
+        canWithdraw:
+          type: boolean
+          description: True when the caller proposed it and nobody has answered yet.
 
     Milestone:
       type: object
@@ -2203,7 +2288,8 @@ components:
             `milestone_cancelled`, `funds_reauthorized`, `retention_refunded`,
             `dispute_opened`, `dispute_updated`, `dispute_evidence_submitted`,
             `dispute_resolved`, `payout_status`, `paypal_event`, `demo_clock_advanced`,
-            `change_order_proposed`, `change_order_accepted`, `change_order_declined`.
+            `change_order_proposed`, `change_order_accepted`, `change_order_declined`,
+            `change_order_withdrawn`, `change_order_cancelled`.
         amountCents:
           type: [integer, "null"]
         paypalRef:

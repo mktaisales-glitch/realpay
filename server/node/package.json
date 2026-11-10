@@ -2,7 +2,7 @@
   "name": "realpay-server",
   "version": "0.1.0",
   "private": true,
-  "description": "RealPay: milestone payments held by PayPal until AI-verified proof of work",
+  "description": "RealPay: milestone payments authorized through PayPal and released when AI checks the proof of work",
   "license": "MIT",
   "type": "module",
   "engines": {
