@@ -1270,6 +1270,331 @@ details > summary {
   align-items: end;
 }
 
+/* ---------- Timeline ---------- */
+
+.timeline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  margin-top: 20px;
+  padding: 20px;
+}
+
+.money {
+  display: grid;
+  gap: 10px;
+}
+
+.money-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 16px;
+}
+
+.money-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.money-bar {
+  display: flex;
+  height: 14px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--surface-2) 0 6px,
+    var(--line) 6px 8px
+  );
+}
+
+.money-seg {
+  height: 100%;
+  min-width: 4px;
+}
+
+.money-seg + .money-seg {
+  border-left: 2px solid var(--surface);
+}
+
+.seg-released {
+  background: var(--ok);
+}
+
+.seg-held {
+  background: var(--held);
+}
+
+.seg-unfunded {
+  background: transparent;
+}
+
+.money-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+}
+
+.money-legend li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.money-legend strong {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+}
+
+.leg-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  transform: translateY(1px);
+}
+
+.leg-released .leg-dot {
+  background: var(--ok);
+}
+
+.leg-held .leg-dot {
+  background: var(--held);
+}
+
+.leg-unfunded .leg-dot {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--surface-2) 0 2px,
+    var(--ink-3) 2px 3px
+  );
+  box-shadow: inset 0 0 0 1px var(--ink-3);
+}
+
+.leg-released strong {
+  color: var(--ok);
+}
+
+.leg-held strong {
+  color: var(--held);
+}
+
+.stepper {
+  --gap: 14px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(178px, 1fr);
+  gap: var(--gap);
+  /* room for the "Now" tag and the focus ring, which the scroller would clip */
+  margin: -4px -6px 0;
+  padding: 12px 6px 6px;
+  list-style: none;
+  overflow-x: auto;
+}
+
+.step {
+  --tone: var(--ink-3);
+  --tone-soft: var(--surface-2);
+  position: relative;
+  display: flex;
+}
+
+.step-held {
+  --tone: var(--held);
+  --tone-soft: var(--held-soft);
+}
+
+.step-checking {
+  --tone: var(--accent);
+  --tone-soft: var(--accent-soft);
+}
+
+.step-released {
+  --tone: var(--ok);
+  --tone-soft: var(--ok-soft);
+}
+
+.step-warn {
+  --tone: var(--warn);
+  --tone-soft: var(--warn-soft);
+}
+
+.step-cancelled {
+  --tone: var(--bad);
+  --tone-soft: var(--bad-soft);
+}
+
+/* the line joining one step to the next; solid once the step is done */
+.step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 27px;
+  left: 100%;
+  width: var(--gap);
+  height: 2px;
+  background: var(--line);
+}
+
+.step.is-done:not(:last-child)::after {
+  background: var(--tone);
+}
+
+.step a {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  width: 100%;
+  padding: 12px 14px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  text-decoration: none;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+
+.step a:hover {
+  border-color: var(--tone);
+}
+
+.step a:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.step.is-current a {
+  border: 2px solid var(--accent);
+  padding: 11px 13px;
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.step-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.step-badge {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--tone-soft);
+  color: var(--tone);
+}
+
+.step-released .step-badge {
+  background: var(--ok);
+  color: var(--surface);
+}
+
+.step-num {
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.step-now {
+  position: absolute;
+  top: -9px;
+  right: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--surface);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.step-title {
+  display: -webkit-box;
+  overflow: hidden;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.step-amount {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.step-late {
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.step-state {
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--tone);
+}
+
+.step-planned .step-state {
+  color: var(--ink-2);
+}
+
+.step-detail {
+  color: var(--ink-2);
+}
+
+.step-track {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 3px;
+  margin-top: 8px;
+}
+
+.step-track span {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-2);
+}
+
+.step-track .on {
+  background: var(--tone);
+}
+
+.step-key {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin: 0;
+}
+
+.step-key .step-icon {
+  width: 14px;
+  height: 14px;
+  margin-left: 8px;
+  color: var(--ink-3);
+}
+
+.step-key .step-icon:first-child {
+  margin-left: 0;
+}
+
 /* ---------- Responsive ---------- */
 
 @media (width <= 900px) {
@@ -1317,6 +1642,66 @@ details > summary {
   }
 
   .secured span {
+    display: none;
+  }
+
+  .timeline {
+    padding: 16px 14px;
+  }
+
+  /* the stepper reads top to bottom on a phone */
+  .stepper {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    grid-template-columns: minmax(0, 1fr);
+    --gap: 10px;
+    overflow: visible;
+  }
+
+  .step:not(:last-child)::after {
+    top: 100%;
+    left: 29px;
+    width: 2px;
+    height: var(--gap);
+  }
+
+  /* compact rows: icon on the left, amount on the right */
+  .step a {
+    grid-template-columns: 30px minmax(0, 1fr) auto;
+    gap: 2px 10px;
+  }
+
+  .step-top {
+    display: contents;
+  }
+
+  .step-badge {
+    grid-area: 1 / 1 / span 5;
+    align-self: start;
+  }
+
+  .step-num {
+    grid-area: 1 / 2;
+    align-self: center;
+  }
+
+  .step-amount {
+    grid-area: 1 / 3;
+    font-size: 16px;
+  }
+
+  .step-title,
+  .step-dates,
+  .step-state,
+  .step-detail {
+    grid-column: 2 / -1;
+  }
+
+  .step-state {
+    margin-top: 2px;
+  }
+
+  .step-track {
     display: none;
   }
 

@@ -18,6 +18,7 @@ import {
   eurosToCents,
   MAX_EXTRA_EUR,
 } from "./changeOrders.js";
+import { timelineCard } from "./timeline.js";
 import { ganttSvg } from "./gantt.js";
 import { preparePayPal, wirePayPalButtons } from "./paypalCheckout.js";
 import { ask, toast, withBusy } from "./ui.js";
@@ -818,7 +819,7 @@ function page(view) {
       </div>
       ${roleSwitch(view)}
     </div>
-    ${totals(view)} ${shareCard(view)}
+    ${timelineCard(view)} ${totals(view)} ${shareCard(view)}
     <h2 class="section-title">Schedule</h2>
     ${schedule(view)}
     <h2 class="section-title">Milestones</h2>
