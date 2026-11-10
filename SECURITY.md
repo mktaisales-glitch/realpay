@@ -29,15 +29,35 @@ No real money is ever involved, but reports are still taken seriously.
   role; only the SHA-256 of each token is stored, and comparison is
   constant-time.
 - Every route checks the role it needs (homeowner or contractor).
-- Creating projects and uploading proof are rate-limited.
+
+**Limits**
+
+- Per client IP: 30 new projects an hour, 20 proof uploads every
+  10 minutes and 25 a day, 60 webhook calls a minute.
+- Per milestone: at most 8 proofs. After that the homeowner has to review
+  them or open a dispute.
+- AI calls: 10 per project a day and 150 for the whole instance, so a
+  single link cannot drain the model quota.
+- Behind a reverse proxy, set `TRUST_PROXY` to the number of proxies
+  (1 on Render). Left at 0 there, every visitor shares the proxy's IP;
+  set too high, anyone can choose their own IP with `X-Forwarded-For`.
 
 **Input**
 
 - Request bodies are validated with zod and limited to 64 KB.
-- Proof uploads are limited to one file of 8 MB, and the type is checked
-  from the file's bytes, not its name.
-- The proof note is screened for instructions aimed at the AI before any
-  model sees it, and the model's answer must match a strict schema.
+- Proof uploads are limited to one file of 8 MB. The type (JPEG, PNG or
+  PDF) is taken from the file's signature bytes, not its name or the
+  `Content-Type` header. This is a type check, not a full parse: a file
+  can start like a JPEG and still be malformed, so uploads are stored
+  outside the web root and never served back to a browser.
+- Prompt injection is handled in layers. A pattern check on the note is
+  only the first filter: it flags obvious attempts ("ignore all previous
+  instructions") before any model is called, and a flag alone blocks
+  automatic release. The real defences are that the model gets the note
+  fenced and labelled as untrusted, its answer must match a strict schema, and the release
+  policy, not the model, decides what money moves. The AI can never
+  release a document on its own, more than the template's cap, or
+  anything during a dispute.
 
 **Browser**
 
