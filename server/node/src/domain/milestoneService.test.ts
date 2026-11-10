@@ -673,10 +673,19 @@ describe("payouts", () => {
 
     expect(getPayout(t.db, ms1, "supplier")?.status).toBe("FAILED");
     expect(actions(ms1)).toContain("payout_failed");
+    const failedView = ownerView();
+    const failed = failedView.milestones.find((m) => m.id === ms1)!;
+    expect(failed.upfront.payoutStatus).toBe("FAILED");
+    expect(failedView.totals.upfrontPaid.value).toBe("0.00");
 
     const retried = await t.service.retryPayout(projectId, ms1, "supplier");
 
     expect(retried?.status).toBe("PENDING");
+    const retriedView = ownerView();
+    expect(
+      retriedView.milestones.find((m) => m.id === ms1)!.upfront.payoutStatus,
+    ).toBe("PENDING");
+    expect(retriedView.totals.upfrontPaid.value).not.toBe("0.00");
     const batchIds = t.paypal.sendPayout.mock.calls.map(
       ([input]) => input.senderBatchId,
     );
@@ -983,6 +992,8 @@ describe("renewing a hold", () => {
       "REAUTHORIZE_NOT_SUPPORTED",
     );
     expect(t.paypal.reauthorize).not.toHaveBeenCalled();
+    const view = ownerView().milestones.find((m) => m.id === ms1)!;
+    expect(view.authorization?.renewable).toBe(false);
   });
 
   it("is allowed once, from day 4, for a PayPal wallet payment", async () => {
@@ -996,6 +1007,8 @@ describe("renewing a hold", () => {
     );
 
     t.service.advanceClock(projectId, 3);
+    const before = ownerView().milestones.find((m) => m.id === ms1)!;
+    expect(before.authorization?.renewable).toBe(true);
     const renewed = await t.service.reauthorize(projectId, ms1);
     expect(renewed.authExpiresAt).toBe("2027-01-08T09:00:00Z");
 
@@ -1005,6 +1018,8 @@ describe("renewing a hold", () => {
       "REAUTHORIZE_ALREADY_USED",
     );
     expect(t.paypal.reauthorize).toHaveBeenCalledTimes(1);
+    const after = ownerView().milestones.find((m) => m.id === ms1)!;
+    expect(after.authorization?.renewable).toBe(false);
   });
 });
 

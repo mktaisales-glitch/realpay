@@ -165,6 +165,20 @@ function schedule(view) {
   </div>`;
 }
 
+/** How each PayPal Payouts status reads on the card. */
+const PAYOUT_STATUS = {
+  SUCCESS: { text: "Paid", tone: "state-ok" },
+  PENDING: { text: "On its way", tone: "state-held" },
+  PROCESSING: { text: "On its way", tone: "state-held" },
+  NEW: { text: "On its way", tone: "state-held" },
+  ONHOLD: { text: "Held by PayPal for review", tone: "state-held" },
+  UNCLAIMED: {
+    text: "Waiting for the recipient to claim it",
+    tone: "state-held",
+  },
+  FAILED: { text: "Failed", tone: "state-bad" },
+};
+
 /* ---------- view: milestone card ---------- */
 
 function splitBlock(milestone) {
@@ -175,6 +189,18 @@ function splitBlock(milestone) {
   if (upfront.value === "0.00")
     upfrontState = html`<span class="state state-pending"
       >Nothing up front</span
+    >`;
+  else if (upfront.paid && upfront.payoutStatus === "FAILED")
+    upfrontState = html`<span class="state state-bad"
+      >⚠ Captured · supplier payout failed, retry below</span
+    >`;
+  else if (
+    upfront.paid &&
+    upfront.payoutStatus &&
+    upfront.payoutStatus !== "SUCCESS"
+  )
+    upfrontState = html`<span class="state state-held"
+      >● Captured · supplier payout on its way</span
     >`;
   else if (upfront.paid)
     upfrontState = html`<span class="state state-ok">✓ Paid to supplier</span>`;
@@ -236,11 +262,16 @@ function metaRow(milestone) {
     (milestone.status === "FUNDED" || milestone.status === "IN_REVIEW")
   ) {
     const urgent =
-      authorization.daysLeft !== null && authorization.daysLeft <= 3;
+      authorization.daysLeft !== null && authorization.daysLeft <= 4;
     items.push(
-      html`<span class="${urgent ? "state-held" : ""}"
-        >🔒 Hold valid ${authorization.daysLeft} more days</span
-      >`,
+      urgent && !authorization.renewable
+        ? html`<strong class="state-held"
+            >🔒 Hold ends in ${authorization.daysLeft} days and can't be renewed
+            · prove the work or cancel before then</strong
+          >`
+        : html`<span class="${urgent ? "state-held" : ""}"
+            >🔒 Hold valid ${authorization.daysLeft} more days</span
+          >`,
     );
   }
   if (retention.status === "held") {
@@ -440,9 +471,8 @@ function payoutsBlock(milestone) {
             ><strong>${PAYOUT_LABELS[payout.kind] ?? payout.kind}</strong> ·
             ${payout.display}</span
           >
-          <span
-            class="${payout.status === "FAILED" ? "state-held" : "state-ok"}"
-            >${payout.status}</span
+          <span class="${PAYOUT_STATUS[payout.status]?.tone ?? "state-pending"}"
+            >${PAYOUT_STATUS[payout.status]?.text ?? payout.status}</span
           >
           <span class="mono">${payout.batchId ?? ""}</span>
         </div>`,

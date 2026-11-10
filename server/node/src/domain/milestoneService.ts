@@ -314,7 +314,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
       throw new DomainError(
         409,
         "MILESTONE_BUSY",
-        "This milestone is already being processed.",
+        "This milestone is already being processed. Wait a moment, then refresh the page.",
       );
     }
     busy.add(milestoneId);

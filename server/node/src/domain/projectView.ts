@@ -156,7 +156,10 @@ export function buildProjectView(
     totals.totalCents +=
       milestone.status === "CANCELLED" ? spentOnCancelled : total;
     totals.feesCents += milestone.paypalFeeCents;
-    if (milestone.upfrontCaptureId)
+    const supplierPayout = payouts.find((payout) => payout.kind === "supplier");
+    // Captured from the homeowner is not the same as paid to the supplier:
+    // a failed payout stays with the platform until it is retried.
+    if (milestone.upfrontCaptureId && supplierPayout?.status !== "FAILED")
       totals.upfrontPaidCents += milestone.upfrontCents;
     if (milestone.heldCaptureId) {
       totals.releasedCents +=
@@ -171,6 +174,7 @@ export function buildProjectView(
       totals.heldCents += milestone.heldCents;
     }
 
+    const history = reauthorizeHistory(ledger, milestone.id);
     const authDaysLeft = milestone.authExpiresAt
       ? Math.max(
           0,
@@ -197,6 +201,7 @@ export function buildProjectView(
         label: milestone.upfrontLabel,
         ...amount(milestone.upfrontCents),
         paid: Boolean(milestone.upfrontCaptureId),
+        payoutStatus: supplierPayout?.status ?? null,
       },
       held: {
         label: milestone.heldLabel,
@@ -216,6 +221,9 @@ export function buildProjectView(
             expiresAt: milestone.authExpiresAt,
             daysLeft: authDaysLeft,
             expired: holdExpired,
+            // PayPal renews a hold once, and only for wallet payments.
+            renewable:
+              history.method === "paypal" && !history.alreadyReauthorized,
           }
         : null,
       paypal: {
@@ -269,7 +277,7 @@ export function buildProjectView(
                 milestone.retentionStatus === "held")),
         ),
         canReauthorize: checkReauthorize({
-          ...reauthorizeHistory(ledger, milestone.id),
+          ...history,
           authExpiresAt: milestone.authExpiresAt,
           now: options.now,
         }).allowed,

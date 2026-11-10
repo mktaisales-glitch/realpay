@@ -661,13 +661,14 @@ select {
 }
 
 .checklist li::before {
+  /* A plain bullet: these are requirements to read, not boxes to tick. */
   content: "";
   flex: none;
-  width: 16px;
-  height: 16px;
-  margin-top: 2px;
-  border-radius: 4px;
-  border: 1.5px solid var(--ink-3);
+  width: 6px;
+  height: 6px;
+  margin-top: 8px;
+  border-radius: 50%;
+  background: var(--ink-3);
 }
 
 .meta-row {
