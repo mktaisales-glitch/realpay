@@ -186,13 +186,17 @@ function splitBlock(milestone) {
     heldState = html`<span class="state state-ok"
       >✓ Released after proof</span
     >`;
+  else if (milestone.authorization?.expired)
+    heldState = html`<span class="state state-bad"
+      >⛔ PayPal hold expired · not charged</span
+    >`;
   else if (status === "FUNDED" || status === "IN_REVIEW")
     heldState = html`<span class="state state-held"
       >● Authorized with PayPal, not charged until the work is proven</span
     >`;
   else if (status === "CANCELLED")
     heldState = html`<span class="state state-pending"
-      >Authorisation voided · not charged</span
+      >Hold released · not charged</span
     >`;
 
   return html`<div class="split">
@@ -219,6 +223,15 @@ function metaRow(milestone) {
     >`,
   ];
   if (
+    authorization?.expired &&
+    (milestone.status === "FUNDED" || milestone.status === "IN_REVIEW")
+  ) {
+    items.push(
+      html`<strong class="state-bad"
+        >Cancel and fund again to continue</strong
+      >`,
+    );
+  } else if (
     authorization &&
     (milestone.status === "FUNDED" || milestone.status === "IN_REVIEW")
   ) {
@@ -250,7 +263,7 @@ function fundPanel(milestone, view) {
     <h4>Fund this milestone · ${milestone.amount.display}</h4>
     <p class="small muted" style="margin:0">
       ${milestone.upfront.value === "0.00" ? "" : html`${milestone.upfront.display} goes to the materials supplier now. `}
-      ${milestone.held.display} is authorised on your account and stays held
+      ${milestone.held.display} is authorized on your account and stays held
       until the work is proven. Cancel before then and you are not charged for
       it.
     </p>
@@ -344,7 +357,31 @@ function verifyingPanel() {
   </div>`;
 }
 
-function proofBlock(proof) {
+/** Shown confidence never reads as certainty: the model can be wrong. */
+const MAX_SHOWN_CONFIDENCE = 99;
+
+function confidenceLine(proof, proofType) {
+  const verdict = proof.verdict;
+  if (!verdict) return "";
+  // A document is never auto-released, so a score would only distract from
+  // the fact that the homeowner has to sign it off.
+  if (proofType === "document" && proof.decision === "review" && verdict.met) {
+    return html`<div class="confidence">
+      Checklist matched · awaiting your sign-off
+    </div>`;
+  }
+  const confidence = Math.min(
+    MAX_SHOWN_CONFIDENCE,
+    Math.round(verdict.confidence * 100),
+  );
+  return html`<div class="confidence">
+    <meter min="0" max="100" value="${confidence}"></meter>
+    AI confidence ${confidence}% · work
+    ${verdict.met ? "matches" : "does not match"} the checklist
+  </div>`;
+}
+
+function proofBlock(proof, proofType) {
   const verdict = proof.verdict;
   const flags = [
     ...(proof.flags?.hard ?? []).map(
@@ -355,7 +392,6 @@ function proofBlock(proof) {
       (flag) => html`<span class="flag">${FLAG_LABELS[flag] ?? flag}</span>`,
     ),
   ];
-  const confidence = verdict ? Math.round(verdict.confidence * 100) : null;
   return html`<div class="proof proof-${proof.decision}">
     <div class="proof-head">
       <span>${DECISION_LABELS[proof.decision] ?? proof.decision}</span>
@@ -364,22 +400,7 @@ function proofBlock(proof) {
         ${formatDateTime(proof.createdAt)}</span
       >
     </div>
-    ${
-      confidence === null
-        ? ""
-        : html`<div class="confidence">
-            <meter
-              min="0"
-              max="100"
-              low="60"
-              high="80"
-              optimum="100"
-              value="${confidence}"
-            ></meter>
-            AI confidence ${confidence}% · work
-            ${verdict.met ? "matches" : "does not match"} the checklist
-          </div>`
-    }
+    ${confidenceLine(proof, proofType)}
     ${proof.decisionReason ? html`<div>${proof.decisionReason}</div>` : ""}
     ${
       verdict?.reasons?.length
@@ -453,13 +474,16 @@ const ACTION_BUTTONS = {
     // Without a proof that passed, releasing is an override, not the default.
     const latest = m.proofs.at(-1);
     const override = !latest || latest.decision === "reject";
+    const label = latest
+      ? "Release anyway (override AI)"
+      : "Release without proof";
     return html`<button
       type="button"
       class="btn ${override ? "btn-secondary" : "btn-ok"}"
       data-act="approve"
       data-milestone="${m.id}"
     >
-      ${override ? "Release anyway" : `Release ${m.held.display}`}
+      ${override ? label : `Release ${m.held.display}`}
     </button>`;
   },
   reject: (m) =>
@@ -594,8 +618,8 @@ function milestoneCard(milestone, view) {
     ${actions.has("fund") ? fundPanel(milestone, view) : ""}
     ${actions.has("submitProof") ? uploadPanel(milestone) : ""}
     ${waitingForProof ? html`<p class="small muted" style="margin:0">Waiting for ${view.contractorName} to upload proof. Nothing is released until it passes.</p>` : ""}
-    ${proofs.map((proof) => proofBlock(proof))} ${disputeBlock(milestone)}
-    ${payoutsBlock(milestone)}
+    ${proofs.map((proof) => proofBlock(proof, milestone.proofType))}
+    ${disputeBlock(milestone)} ${payoutsBlock(milestone)}
     ${
       buttons.length > 0 || milestone.proofs.length > 0
         ? html`<div class="btn-row">
@@ -823,14 +847,26 @@ function afterRender() {
 }
 
 const CONFIRMATIONS = {
-  approve: (m) => ({
-    title: `Release ${m.held.display}?`,
-    message: `${m.held.display} goes to the contractor through PayPal, minus the retention kept for snagging. This can't be undone.`,
-    confirmLabel: "Release funds",
-  }),
+  approve: (m) => {
+    const latest = m.proofs.at(-1);
+    let warning = "";
+    if (!latest) warning = "No proof has been uploaded yet. ";
+    else if (latest.decision === "reject")
+      warning = "The AI rejected the latest proof. ";
+    return {
+      title: `Release ${m.held.display}?`,
+      message: `${warning}${m.held.display} goes to the contractor through PayPal, minus the retention kept for snagging. This can't be undone.`,
+      confirmLabel: warning
+        ? `Release ${m.held.display} anyway`
+        : "Release funds",
+      danger: Boolean(warning),
+    };
+  },
   cancel: (m) => ({
     title: "Cancel this milestone?",
-    message: `The hold on ${m.held.display} is voided and you are not charged for it. Money already paid to the supplier is not refunded here.`,
+    message: m.authorization?.expired
+      ? `The PayPal hold on ${m.held.display} already expired, so you were never charged for it. Money already paid to the supplier is not refunded here.`
+      : `The hold on ${m.held.display} is voided and you are not charged for it. Money already paid to the supplier is not refunded here.`,
     confirmLabel: "Cancel milestone",
     danger: true,
   }),
@@ -859,7 +895,7 @@ const CONFIRMATIONS = {
 
 const BODILESS = {
   approve: "Funds released through PayPal.",
-  cancel: "Milestone cancelled. The hold was voided.",
+  cancel: "Milestone cancelled. You were not charged for the held part.",
   reauthorize: "Hold renewed for another period.",
   "release-retention": "Retention paid to the contractor.",
   "submit-evidence": "Evidence pack sent to PayPal.",

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { listLedger, verifyLedger } from "../audit/ledger.ts";
-import { getPayout, listProofs } from "../db/repository.ts";
+import { getPayout, getProject, listProofs } from "../db/repository.ts";
 import {
   aiOutcome,
   APPROVED_CARD,
@@ -15,6 +15,7 @@ import {
 } from "../testUtils.ts";
 import { DomainError } from "./domainError.ts";
 import { MAX_PROOFS_PER_MILESTONE } from "./milestoneService.ts";
+import { buildProjectView } from "./projectView.ts";
 
 /* Every test gets a fresh in-memory database, fake PayPal and fake AI. */
 
@@ -524,6 +525,67 @@ describe("cancelling a milestone", () => {
       409,
       "INVALID_MILESTONE_STATE",
     );
+  });
+});
+
+// The fake authorization expires on 9 Dec, 29 days after FIXED_NOW.
+async function expireHeldMilestone() {
+  setUp({ demoMode: true });
+  await t.service.fundWithCard(projectId, ms2, APPROVED_CARD);
+  await t.service.submitProof(projectId, ms2, upload("tiles"));
+  t.service.advanceClock(projectId, 30);
+}
+
+function ownerView() {
+  const project = getProject(t.db, projectId)!;
+  return buildProjectView(t.db, project, "owner", {
+    today: "2026-12-10",
+    now: t.service.projectNow(project),
+    demoMode: true,
+  });
+}
+
+describe("a hold that expired", () => {
+  it("can no longer be released or take new proof", async () => {
+    await expireHeldMilestone();
+    const capturesBefore = t.paypal.captureAuthorization.mock.calls.length;
+
+    await expectDomainError(
+      t.service.approveRelease(projectId, ms2),
+      409,
+      "AUTHORIZATION_EXPIRED",
+    );
+    await expectDomainError(
+      t.service.submitProof(projectId, ms2, upload("tiles-again")),
+      409,
+      "AUTHORIZATION_EXPIRED",
+    );
+    expect(t.paypal.captureAuthorization).toHaveBeenCalledTimes(capturesBefore);
+  });
+
+  it("is cancelled straight from review without asking PayPal to void it", async () => {
+    await expireHeldMilestone();
+    expect(t.milestone(projectId, 2).status).toBe("IN_REVIEW");
+
+    await t.service.cancelMilestone(projectId, ms2);
+
+    expect(t.milestone(projectId, 2).status).toBe("CANCELLED");
+    expect(t.paypal.voidAuthorization).not.toHaveBeenCalled();
+    const entry = listLedger(t.db, projectId).find(
+      (e) => e.action === "milestone_cancelled",
+    );
+    expect(entry?.detail).toMatchObject({ voided: false, holdExpired: true });
+  });
+
+  it("only offers cancel, and stops counting as held money", async () => {
+    await expireHeldMilestone();
+
+    const view = ownerView();
+    const milestone = view.milestones.find((m) => m.id === ms2)!;
+
+    expect(milestone.authorization?.expired).toBe(true);
+    expect(milestone.actions).toEqual(["cancel"]);
+    expect(view.totals.held.value).toBe("0.00");
   });
 });
 

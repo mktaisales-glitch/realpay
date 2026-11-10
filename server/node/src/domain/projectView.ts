@@ -10,7 +10,11 @@ import {
 } from "../db/repository.ts";
 import { DomainError } from "./domainError.ts";
 import { formatEuro, toPayPalValue } from "./money.ts";
-import { checkReauthorize, reauthorizeHistory } from "./reauthorization.ts";
+import {
+  checkReauthorize,
+  isHoldExpired,
+  reauthorizeHistory,
+} from "./reauthorization.ts";
 import { daysBetween } from "./schedule.ts";
 
 /* ######################################################################
@@ -55,11 +59,20 @@ function actionsFor(
     failedPayout: boolean;
     canReauthorize: boolean;
     retentionPayoutOut: boolean;
+    holdExpired: boolean;
   },
 ): MilestoneAction[] {
   const actions: MilestoneAction[] = [];
   const { status } = milestone;
   const disputed = hasOpenDispute(milestone);
+
+  // PayPal can no longer capture an expired hold: the only way forward is to
+  // cancel the milestone (nothing was charged) and fund it again.
+  if (context.holdExpired && (status === "FUNDED" || status === "IN_REVIEW")) {
+    if (role === "owner" && !disputed) actions.push("cancel");
+    if (context.upfrontPending) actions.push("retryUpfront");
+    return actions;
+  }
 
   if (role === "owner") {
     if (status === "PLANNED") actions.push("fund", "cancel");
@@ -131,6 +144,9 @@ export function buildProjectView(
 
   const milestoneViews = milestones.map((milestone) => {
     const payouts = listPayouts(db, milestone.id);
+    const holdExpired =
+      !milestone.heldCaptureId &&
+      isHoldExpired(milestone.authExpiresAt, options.now);
     const proofs = listProofs(db, milestone.id);
     const total = milestone.upfrontCents + milestone.heldCents;
     // A cancelled milestone only counts for what was actually spent on it.
@@ -149,8 +165,8 @@ export function buildProjectView(
       if (milestone.retentionStatus === "held")
         totals.retentionCents += milestone.retentionCents;
     } else if (
-      milestone.status === "FUNDED" ||
-      milestone.status === "IN_REVIEW"
+      (milestone.status === "FUNDED" || milestone.status === "IN_REVIEW") &&
+      !holdExpired
     ) {
       totals.heldCents += milestone.heldCents;
     }
@@ -199,6 +215,7 @@ export function buildProjectView(
             id: milestone.authorizationId,
             expiresAt: milestone.authExpiresAt,
             daysLeft: authDaysLeft,
+            expired: holdExpired,
           }
         : null,
       paypal: {
@@ -259,6 +276,7 @@ export function buildProjectView(
         retentionPayoutOut: payouts.some(
           (payout) => payout.kind === "retention" && payout.status !== "FAILED",
         ),
+        holdExpired,
       }),
     };
   });

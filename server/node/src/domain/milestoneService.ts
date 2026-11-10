@@ -48,7 +48,11 @@ import type { ProofVerifier } from "../verification/aiVerifier.ts";
 import { runPrechecks } from "../verification/prechecks.ts";
 import { DomainError } from "./domainError.ts";
 import { formatEuro, percentOf } from "./money.ts";
-import { checkReauthorize, reauthorizeHistory } from "./reauthorization.ts";
+import {
+  checkReauthorize,
+  isHoldExpired,
+  reauthorizeHistory,
+} from "./reauthorization.ts";
 import { decideRelease } from "./releasePolicy.ts";
 import {
   addDays,
@@ -218,6 +222,9 @@ export function asPayPalClientError(
   };
 }
 
+const HOLD_EXPIRED_REASON =
+  "This PayPal hold has expired, so it can no longer be captured. Nobody was charged for it: cancel the milestone and fund it again.";
+
 function requireNoOpenDispute(milestone: Milestone) {
   if (milestone.disputeId && milestone.disputeStatus !== "RESOLVED") {
     throw new DomainError(
@@ -241,6 +248,12 @@ export function createMilestoneService(deps: ServiceDependencies) {
 
   function projectToday(project: Project): string {
     return toIsoDate(projectNow(project));
+  }
+
+  function requireLiveHold(project: Project, milestone: Milestone) {
+    if (isHoldExpired(milestone.authExpiresAt, projectNow(project))) {
+      throw new DomainError(409, "AUTHORIZATION_EXPIRED", HOLD_EXPIRED_REASON);
+    }
   }
 
   function ledger(
@@ -859,10 +872,21 @@ export function createMilestoneService(deps: ServiceDependencies) {
       requireNoOpenDispute(milestone);
       // IN_REVIEW means proof of finished work is waiting: the owner rejects
       // it first, with a reason the contractor sees, and can then cancel.
-      requireStatus(milestone, ["PLANNED", "FUNDED"], "cancel");
-      if (milestone.authorizationId) {
+      const expired = isHoldExpired(
+        milestone.authExpiresAt,
+        projectNow(project),
+      );
+      // An expired hold has nothing left to review or void, so it can be
+      // cancelled straight from review.
+      requireStatus(
+        milestone,
+        expired ? ["FUNDED", "IN_REVIEW"] : ["PLANNED", "FUNDED"],
+        "cancel",
+      );
+      const voided = Boolean(milestone.authorizationId) && !expired;
+      if (voided) {
         await paypal.voidAuthorization(
-          milestone.authorizationId,
+          milestone.authorizationId!,
           `${milestone.authorizationId}:void`,
         );
       }
@@ -871,7 +895,8 @@ export function createMilestoneService(deps: ServiceDependencies) {
         amountCents: milestone.authorizationId ? milestone.heldCents : 0,
         paypalRef: milestone.authorizationId,
         detail: {
-          voided: Boolean(milestone.authorizationId),
+          voided,
+          holdExpired: expired,
           upfrontKeptBySupplier: Boolean(milestone.upfrontCaptureId),
         },
       });
@@ -889,6 +914,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
     const { project, milestone } = requireMilestone(projectId, milestoneId);
     return withLock(milestone.id, async () => {
       requireStatus(milestone, ["FUNDED", "IN_REVIEW"], "submit proof for");
+      requireLiveHold(project, milestone);
       if (countProofs(db, milestone.id) >= MAX_PROOFS_PER_MILESTONE) {
         throw new DomainError(
           409,
@@ -1038,6 +1064,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
     return withLock(milestone.id, async () => {
       requireStatus(milestone, ["FUNDED", "IN_REVIEW"], "release");
       requireNoOpenDispute(milestone);
+      requireLiveHold(project, milestone);
       return releaseHeld(project, milestone, "owner", "Approved by the owner.");
     });
   }

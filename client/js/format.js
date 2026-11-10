@@ -73,7 +73,7 @@ export const STATUS_LABELS = {
 export const DECISION_LABELS = {
   release: "Approved by AI · funds released",
   review: "Sent to the homeowner for review",
-  reject: "Rejected · funds stay held",
+  reject: "Proof rejected · nothing released",
 };
 
 export const FLAG_LABELS = {
@@ -99,8 +99,8 @@ export const PAYOUT_LABELS = {
 export const LEDGER_LABELS = {
   project_created: "Project created",
   order_created: "PayPal order created",
-  funds_authorized: "Funds authorised and held",
-  funds_reauthorized: "Authorisation renewed",
+  funds_authorized: "Funds authorized and held",
+  funds_reauthorized: "Authorization renewed",
   funding_declined: "Payment declined",
   upfront_captured: "Materials payment captured",
   payout_sent: "Payout sent",

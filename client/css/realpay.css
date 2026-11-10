@@ -628,6 +628,10 @@ select {
   color: var(--held);
 }
 
+.state-bad {
+  color: var(--bad);
+}
+
 .state-pending {
   color: var(--ink-3);
 }
@@ -846,6 +850,38 @@ paypal-message {
 .confidence meter {
   width: 120px;
   height: 8px;
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+/* The bar takes the colour of the decision, not of the score: a confident
+ * rejection must not look green. */
+.confidence meter::-webkit-meter-bar {
+  border: 0;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.confidence meter::-webkit-meter-optimum-value,
+.confidence meter::-webkit-meter-suboptimum-value,
+.confidence meter::-webkit-meter-even-less-good-value {
+  border-radius: 999px;
+  background: var(--meter, var(--ok));
+}
+
+.confidence meter::-moz-meter-bar {
+  border-radius: 999px;
+  background: var(--meter, var(--ok));
+}
+
+.proof-review {
+  --meter: var(--warn);
+}
+
+.proof-reject {
+  --meter: var(--bad);
 }
 
 .proof ul {

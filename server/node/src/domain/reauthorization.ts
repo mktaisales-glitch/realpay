@@ -16,6 +16,11 @@ const DAY_MS = 86_400_000;
 export const AUTHORIZATION_VALID_DAYS = 29;
 export const REAUTHORIZE_FIRST_DAY = 4;
 
+/** PayPal can no longer capture or void an authorization past this time. */
+export function isHoldExpired(authExpiresAt: string | null, now: Date) {
+  return Boolean(authExpiresAt) && now.getTime() >= Date.parse(authExpiresAt!);
+}
+
 export type ReauthorizeCheck =
   | { allowed: true; day: number }
   | { allowed: false; code: string; reason: string };
@@ -75,7 +80,7 @@ export function checkReauthorize(input: {
       reason: `A hold can be renewed from day ${REAUTHORIZE_FIRST_DAY}; this one is on day ${day}.`,
     };
   }
-  if (input.now.getTime() >= expiresMs) {
+  if (isHoldExpired(input.authExpiresAt, input.now)) {
     return {
       allowed: false,
       code: "AUTHORIZATION_EXPIRED",
