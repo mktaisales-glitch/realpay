@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap"
+    />
+    <link rel="stylesheet" href="/css/realpay.css" />
+    <title>Project · RealPay</title>
+    <meta
+      name="description"
+      content="Milestone payments held by PayPal until the work is proven."
+    />
+    <script type="module" src="/js/project.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="logo" href="/" aria-label="RealPay home">
+        <svg viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="8" fill="var(--brand)" />
+          <path
+            d="M9 17.5l4.5 4.5L23 11"
+            fill="none"
+            stroke="var(--accent)"
+            stroke-width="3.4"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+        RealPay
+      </a>
+      <span class="secured">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M12 2l8 3v6c0 5-3.4 9.3-8 11-4.6-1.7-8-6-8-11V5l8-3zm-1.2 13.6l6-6-1.4-1.4-4.6 4.6-2.2-2.2-1.4 1.4 3.6 3.6z"
+          />
+        </svg>
+        <span>Payments processed securely by PayPal</span>
+      </span>
+    </header>
+    <div class="container">
+      <main id="app" aria-live="polite">
+        <div class="card empty">
+          <span class="spinner" aria-hidden="true"></span>Loading project…
+        </div>
+      </main>
+      <footer class="footer">
+        <span
+          >RealPay · built for the PayPal AI Hackathon 2026 · open source under
+          the MIT licence</span
+        >
+        <span
+          >Sandbox demo: no real money moves. RealPay is not affiliated with
+          PayPal.</span
+        >
+      </footer>
+    </div>
+  </body>
+</html>

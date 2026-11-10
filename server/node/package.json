@@ -9,16 +9,17 @@
     "node": ">=20"
   },
   "scripts": {
-    "format": "prettier . --write",
-    "format:check": "prettier . --check",
-    "lint": "eslint . && npm run typecheck",
+    "format": "prettier . ../../client --write",
+    "format:check": "prettier . ../../client --check",
+    "lint": "eslint . && npm run lint:client && npm run typecheck",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "start": "dotenvx run -f ../../.env --quiet -- tsx src/server.ts",
     "dev": "dotenvx run -f ../../.env --quiet -- tsx --watch src/server.ts",
     "start:prod": "node --import tsx src/server.ts",
-    "seed": "dotenvx run -f ../../.env --quiet -- tsx scripts/seedDemo.ts"
+    "seed": "dotenvx run -f ../../.env --quiet -- tsx scripts/seedDemo.ts",
+    "lint:client": "cd ../.. && eslint -c server/node/eslint.client.config.mjs client"
   },
   "dependencies": {
     "@dotenvx/dotenvx": "^2.38.2",
