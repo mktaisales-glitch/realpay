@@ -90,7 +90,7 @@ export function createPayPalRouter({
         transmissionSig: request.get("paypal-transmission-sig"),
         transmissionTime: request.get("paypal-transmission-time"),
       },
-      request.body,
+      request.body ?? {},
     );
     response.json(result);
   }
