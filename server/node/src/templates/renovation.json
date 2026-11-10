@@ -1,7 +1,7 @@
 {
   "id": "renovation",
   "name": "Home renovation",
-  "description": "A home renovation paid like a bank construction loan: materials go straight to the supplier, labour is held until the work is proven, and 5% stays back for 30 days as a snagging retention.",
+  "description": "A home renovation paid like a bank construction loan: materials go straight to the supplier, labour is authorized on the homeowner's PayPal and only charged once the work is proven, and 5% stays back for 30 days as a retention for final fixes.",
   "defaultTitle": "Home renovation, Barcelona",
   "proofRole": "Contractor",
   "retention": { "basisPoints": 500, "days": 30 },

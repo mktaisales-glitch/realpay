@@ -10,6 +10,9 @@ import { formatDateTime, html, raw } from "./format.js";
 /** Mirrors MAX_CHANGE_ORDER_CENTS on the server: one extra is one milestone. */
 export const MAX_EXTRA_EUR = 2000;
 
+/** Mirrors MIN_CHANGE_ORDER_CENTS: a paid extra is at least €10. */
+export const MIN_EXTRA_EUR = 10;
+
 const AMOUNT_PATTERN = /^\d{1,7}(?:[.,]\d{1,2})?$/;
 
 /**
@@ -39,11 +42,29 @@ function other(role) {
   return role === "owner" ? "contractor" : "owner";
 }
 
+/** An agreed extra whose milestone was later cancelled is not owed any more. */
+function isCancelled(changeOrder) {
+  return (
+    changeOrder.status === "cancelled" ||
+    changeOrder.milestone?.status === "CANCELLED"
+  );
+}
+
+const CLOSED_PILLS = {
+  declined: "Declined",
+  withdrawn: "Withdrawn",
+  cancelled: "Cancelled",
+};
+
 function statusPill(changeOrder, view) {
+  if (isCancelled(changeOrder))
+    return html`<span class="pill pill-cancelled">Cancelled</span>`;
   if (changeOrder.status === "accepted")
     return html`<span class="pill pill-released">Agreed</span>`;
-  if (changeOrder.status === "declined")
-    return html`<span class="pill pill-cancelled">Declined</span>`;
+  if (CLOSED_PILLS[changeOrder.status])
+    return html`<span class="pill pill-cancelled"
+      >${CLOSED_PILLS[changeOrder.status]}</span
+    >`;
   if (changeOrder.canDecide)
     return html`<span class="pill pill-warn">Needs your answer</span>`;
   return html`<span class="pill pill-warn"
@@ -64,6 +85,14 @@ function outcome(changeOrder, view) {
   const when = formatDateTime(changeOrder.decidedAt);
   if (changeOrder.status === "declined")
     return html`<span>Declined by ${by} · ${when} · can't be paid</span>`;
+  if (changeOrder.status === "withdrawn")
+    return html`<span>Withdrawn by ${by} · ${when} · can't be paid</span>`;
+  if (isCancelled(changeOrder))
+    return html`<span
+      >Cancelled with its
+      milestone${changeOrder.status === "cancelled" ? ` · ${when}` : ""} · not
+      charged for the part on hold</span
+    >`;
   if (changeOrder.milestone) {
     return html`<span>Agreed by ${by} · ${when}</span>
       <a class="extra-link" href="#m-${changeOrder.milestone.id}"
@@ -117,67 +146,91 @@ function changeOrderItem(changeOrder, view) {
             </div>`
           : ""
       }
+      ${
+        changeOrder.canWithdraw
+          ? html`<button
+              type="button"
+              class="btn btn-secondary"
+              data-act="co-withdraw"
+              data-change-order="${changeOrder.id}"
+            >
+              Withdraw
+            </button>`
+          : ""
+      }
     </div>
   </li>`;
 }
 
-function proposeForm(view) {
+/** @param {any} view @param {boolean} open */
+function proposeForm(view, open) {
   const option = (role) =>
     html`<option value="${role}" ${role === view.role ? "selected" : ""}>
       ${partyWithRole(view, role)}
     </option>`;
-  return html`<form class="panel extras-form" data-change-order-form>
-    <h3>Propose an extra</h3>
-    <label class="field">
-      <span>What needs doing, exactly</span>
-      <textarea
-        class="input"
-        name="description"
-        required
-        minlength="3"
-        maxlength="280"
-        rows="2"
-        placeholder="Add a shelf above the washing machine"
-      ></textarea>
-    </label>
-    <div class="extras-fields">
+  return html`<details
+    class="extras-propose"
+    data-key="extras-form"
+    ${open ? raw("open") : ""}
+  >
+    <summary class="btn btn-secondary">Propose an extra</summary>
+    <form class="panel extras-form" data-change-order-form>
       <label class="field">
-        <span>Price (€)</span>
-        <input
+        <span>What needs doing, exactly</span>
+        <textarea
           class="input"
-          name="price"
-          type="text"
-          inputmode="decimal"
-          autocomplete="off"
+          name="description"
           required
-          placeholder="0.00"
-          aria-describedby="extras-price-help"
-        />
+          minlength="3"
+          maxlength="280"
+          rows="2"
+          placeholder="Add a shelf above the washing machine"
+        ></textarea>
       </label>
-      <label class="field">
-        <span>Asked for by</span>
-        <select class="input" name="requestedBy">
-          ${option("owner")} ${option("contractor")}
-        </select>
-      </label>
-      <button type="submit" class="btn btn-primary">
-        Send to ${party(view, other(view.role))}
-      </button>
-    </div>
-    <p class="small muted" id="extras-price-help" style="margin:0">
-      Up to €${MAX_EXTRA_EUR.toLocaleString("en-IE")}. €0 records a free change.
-      With a price, it becomes a new milestone once
-      ${party(view, other(view.role))} agrees, and is held and proven like the
-      rest.
-    </p>
-  </form>`;
+      <div class="extras-fields">
+        <label class="field">
+          <span>Price (€)</span>
+          <input
+            class="input"
+            name="price"
+            type="text"
+            inputmode="decimal"
+            autocomplete="off"
+            required
+            placeholder="10.00"
+            aria-describedby="extras-price-help"
+          />
+        </label>
+        <label class="field">
+          <span>Asked for by</span>
+          <select class="input" name="requestedBy">
+            ${option("owner")} ${option("contractor")}
+          </select>
+        </label>
+        <button type="submit" class="btn btn-primary">
+          Send to ${party(view, other(view.role))}
+        </button>
+      </div>
+      <p class="small muted" id="extras-price-help" style="margin:0">
+        €0 records a free change, or from €${MIN_EXTRA_EUR} up to
+        €${MAX_EXTRA_EUR.toLocaleString("en-IE")}. With a price, it becomes a
+        new milestone once ${party(view, other(view.role))} agrees, then is
+        funded and proven like the rest.
+      </p>
+    </form>
+  </details>`;
 }
 
-/** @param {any} view @param {boolean} [open] */
-export function changeOrdersCard(view, open = false) {
+/**
+ * @param {any} view
+ * @param {boolean} [open] the card
+ * @param {boolean} [formOpen] the "Propose an extra" form inside it
+ */
+export function changeOrdersCard(view, open = false, formOpen = false) {
   const changeOrders = view.changeOrders ?? [];
   const agreed = changeOrders.filter(
-    (changeOrder) => changeOrder.status === "accepted",
+    (changeOrder) =>
+      changeOrder.status === "accepted" && !isCancelled(changeOrder),
   );
   const agreedCents = agreed.reduce(
     (sum, changeOrder) =>
@@ -216,9 +269,12 @@ export function changeOrdersCard(view, open = false) {
                 .toReversed()
                 .map((changeOrder) => changeOrderItem(changeOrder, view))}
             </ol>`
-          : ""
+          : html`<p class="muted">
+              No extras yet. Anything outside the original plan goes here, and
+              nothing is paid until you both agree.
+            </p>`
       }
-      ${proposeForm(view)}
+      ${proposeForm(view, formOpen)}
     </div>
   </details>`;
 }

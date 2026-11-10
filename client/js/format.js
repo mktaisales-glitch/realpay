@@ -63,7 +63,7 @@ export function render(element, markup) {
 
 export const STATUS_LABELS = {
   PLANNED: "Not funded",
-  FUNDED: "Funds held",
+  FUNDED: "On hold",
   IN_REVIEW: "Proof in review",
   RELEASED: "Released",
   CLOSED: "Closed",
@@ -99,7 +99,7 @@ export const PAYOUT_LABELS = {
 export const LEDGER_LABELS = {
   project_created: "Project created",
   order_created: "PayPal order created",
-  funds_authorized: "Funds authorized and held",
+  funds_authorized: "Funds authorized, not charged yet",
   funds_reauthorized: "Authorization renewed",
   funding_declined: "Payment declined",
   upfront_captured: "Materials payment captured",
@@ -110,7 +110,7 @@ export const LEDGER_LABELS = {
   proof_rejected: "Proof rejected before AI",
   ai_verdict: "AI verdict",
   policy_decision: "Release policy applied",
-  held_released: "Held funds released",
+  held_released: "Labour payment released",
   milestone_cancelled: "Milestone cancelled",
   retention_refunded: "Retention refunded",
   schedule_shifted: "Schedule moved",
@@ -124,6 +124,8 @@ export const LEDGER_LABELS = {
   change_order_proposed: "Extra proposed",
   change_order_accepted: "Extra agreed",
   change_order_declined: "Extra declined",
+  change_order_withdrawn: "Extra withdrawn",
+  change_order_cancelled: "Extra cancelled",
 };
 
 const DATE_FORMAT = new Intl.DateTimeFormat("en-GB", {

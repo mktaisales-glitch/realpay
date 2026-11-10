@@ -18,6 +18,7 @@ import {
   changeOrdersCard,
   eurosToCents,
   MAX_EXTRA_EUR,
+  MIN_EXTRA_EUR,
 } from "./changeOrders.js";
 import {
   balanceHero,
@@ -51,6 +52,8 @@ const state = {
   closed: new Set(),
   /** The milestone the next step is about; it starts open. */
   focus: "",
+  /** Where keyboard focus goes back to after the next re-render. */
+  restore: /** @type {string[]} */ ([]),
 };
 
 /** Whether a fold is open: the viewer's choice first, then the default. */
@@ -100,15 +103,68 @@ async function fetchView(withToken = token()) {
   });
 }
 
+const FOCUS_ATTRIBUTES = [
+  "data-act",
+  "data-milestone",
+  "data-change-order",
+  "data-kind",
+  "data-days",
+  "data-scenario",
+  "data-role",
+  "name",
+];
+
+/**
+ * Selectors that find an element again after a re-render: the element
+ * itself, then the fold it lives in.
+ * @param {Element | null} element
+ * @returns {string[]}
+ */
+function focusSelectors(element) {
+  if (!element || element === app || !app.contains(element)) return [];
+  const fold = element.closest("details[data-key]");
+  const foldSummary = fold
+    ? `details[data-key="${CSS.escape(fold.dataset.key)}"] > summary`
+    : "";
+  if (element.id) return [`#${CSS.escape(element.id)}`, foldSummary];
+  if (element.tagName === "SUMMARY") return [foldSummary];
+  const attributes = FOCUS_ATTRIBUTES.filter((name) =>
+    element.hasAttribute(name),
+  ).map((name) => `[${name}="${CSS.escape(element.getAttribute(name))}"]`);
+  const own =
+    attributes.length > 0
+      ? element.tagName.toLowerCase() + attributes.join("")
+      : "";
+  return [own, foldSummary];
+}
+
+/** Puts keyboard focus back where it was, so a re-render doesn't lose it. */
+function restoreFocus(selectors) {
+  if (app.contains(document.activeElement)) return;
+  for (const selector of selectors) {
+    const element = selector ? app.querySelector(selector) : null;
+    if (element instanceof HTMLElement && !element.matches(":disabled")) {
+      element.focus({ preventScroll: true });
+      return;
+    }
+  }
+}
+
 /** @param {any} view */
 function show(view) {
   const json = JSON.stringify(view);
   if (json === state.lastJson) return;
   state.lastJson = json;
   state.view = view;
+  const selectors =
+    state.restore.length > 0
+      ? state.restore
+      : focusSelectors(document.activeElement);
+  state.restore = [];
   document.title = `${view.title} · RealPay`;
   render(app, page(view));
   afterRender();
+  restoreFocus(selectors.filter(Boolean));
 }
 
 /**
@@ -165,9 +221,9 @@ function totals(view) {
   return html`<dl class="totals">
     ${cell("", "Project value", t.total)}
     ${cell("", "Paid to suppliers", t.upfrontPaid)}
-    ${cell("held", "Authorized, not charged", t.held)}
+    ${cell("held", "On hold", t.held)}
     ${cell("released", "Released to contractor", t.released)}
-    ${cell("", `Retention (${g.retentionPercent}%)`, t.retention)}
+    ${cell("", `Retention (final fixes, ${g.retentionPercent}%)`, t.retention)}
     ${cell("", "PayPal fees", t.fees)}
     <p class="governance">
       <span
@@ -177,7 +233,7 @@ function totals(view) {
       >
       <span
         ><strong>${g.retentionPercent}% retention</strong> is kept
-        ${g.retentionDays} days after each release for snagging.</span
+        ${g.retentionDays} days after each release for final fixes.</span
       >
     </p>
   </dl>`;
@@ -188,7 +244,7 @@ function schedule(view) {
     ${ganttSvg(view.milestones, view.today)}
     <div class="legend">
       <span><i style="border:1.5px dashed var(--ink-3)"></i>Planned</span>
-      <span><i style="background:var(--held)"></i>Funds held</span>
+      <span><i style="background:var(--held)"></i>On hold</span>
       <span><i style="background:var(--ok)"></i>Released</span>
       <span><i style="background:var(--ink-3)"></i>Not funded</span>
       <span
@@ -205,7 +261,7 @@ const PAYOUT_STATUS = {
   PENDING: { text: "On its way", tone: "state-held" },
   PROCESSING: { text: "On its way", tone: "state-held" },
   NEW: { text: "On its way", tone: "state-held" },
-  ONHOLD: { text: "Held by PayPal for review", tone: "state-held" },
+  ONHOLD: { text: "Paused by PayPal for review", tone: "state-held" },
   UNCLAIMED: {
     text: "Waiting for the recipient to claim it",
     tone: "state-held",
@@ -240,7 +296,7 @@ function splitBlock(milestone) {
     upfrontState = html`<span class="state state-ok">✓ Paid to supplier</span>`;
 
   let heldState = html`<span class="state state-pending"
-    >Authorized with PayPal once funded</span
+    >Authorized on the homeowner's PayPal once funded</span
   >`;
   if (held.released)
     heldState = html`<span class="state state-ok"
@@ -248,15 +304,15 @@ function splitBlock(milestone) {
     >`;
   else if (milestone.authorization?.expired)
     heldState = html`<span class="state state-bad"
-      >⛔ PayPal hold expired · not charged</span
+      >⛔ Authorization expired · not charged</span
     >`;
   else if (status === "FUNDED" || status === "IN_REVIEW")
     heldState = html`<span class="state state-held"
-      >● Authorized with PayPal, not charged until the work is proven</span
+      >● On hold · Authorized on the homeowner's PayPal, not charged yet</span
     >`;
   else if (status === "CANCELLED")
     heldState = html`<span class="state state-pending"
-      >Hold released · not charged</span
+      >Authorization voided · not charged</span
     >`;
 
   return html`<div class="split">
@@ -328,9 +384,9 @@ function fundPanel(milestone, view) {
     <h4>Fund this milestone · ${milestone.amount.display}</h4>
     <p class="small muted" style="margin:0">
       ${milestone.upfront.value === "0.00" ? "" : html`${milestone.upfront.display} goes to the materials supplier now. `}
-      ${milestone.held.display} is authorized on your account and stays held
-      until the work is proven. Cancel before then and you are not charged for
-      it.
+      ${milestone.held.display} is authorized on your PayPal and stays on hold,
+      not charged yet, until the work is proven. Cancel before then and you are
+      not charged for it.
     </p>
     <div class="paypal-buttons">
       <paypal-button
@@ -390,7 +446,9 @@ function uploadPanel(milestone) {
       ? "image/jpeg,image/png,application/pdf"
       : "image/jpeg,image/png";
   return html`<form class="panel upload" data-upload="${milestone.id}">
-    <h4>${milestone.proofs.length > 0 ? "Upload a new proof" : "Prove this milestone is done"}</h4>
+    <h4>
+      ${milestone.proofs.length > 0 ? "Upload a new proof" : "Prove this milestone is done"}
+    </h4>
     <p class="small muted" style="margin:0">
       ${
         milestone.proofType === "document"
@@ -736,7 +794,9 @@ function milestoneCard(milestone, view) {
         data-key="${key}-info"
         ${openAttr(`${key}-info`)}
       >
-        <summary>Payment split, dates${uploading ? "" : " and checklist"}</summary>
+        <summary>
+          Payment split, dates${uploading ? "" : " and checklist"}
+        </summary>
         <div class="fold-stack">
           ${splitBlock(milestone)} ${metaRow(milestone)}
           ${uploading ? "" : checklist(milestone)}
@@ -748,11 +808,15 @@ function milestoneCard(milestone, view) {
 
 /* ---------- view: next step ---------- */
 
-/** The one thing to do now, for whoever is looking. */
+/**
+ * The one thing to do now, for whoever is looking: "Your turn" when the
+ * viewer has an action, otherwise who the project is waiting for.
+ */
 function nextStep(view) {
   const pending = (view.changeOrders ?? []).find((item) => item.canDecide);
   if (pending)
     return {
+      label: "Your turn",
       text: `Answer extra #${pending.seq} · ${pending.price.display}`,
       href: "#extras",
     };
@@ -762,10 +826,16 @@ function nextStep(view) {
       (m) => `Retry a failed payout on milestone ${m.seq}`,
     ],
     [
-      (m, a) => a.has("approve") && m.proofs.at(-1)?.decision !== "reject" && m.proofs.length > 0,
+      (m, a) =>
+        a.has("approve") &&
+        m.proofs.at(-1)?.decision !== "reject" &&
+        m.proofs.length > 0,
       (m) => `Review the proof for milestone ${m.seq}`,
     ],
-    [(m, a) => a.has("submitProof"), (m) => `Upload proof for milestone ${m.seq}`],
+    [
+      (m, a) => a.has("submitProof"),
+      (m) => `Upload proof for milestone ${m.seq}`,
+    ],
     [
       (m, a) => a.has("fund"),
       (m) => `Fund milestone ${m.seq} · ${m.amount.display}`,
@@ -780,19 +850,28 @@ function nextStep(view) {
       matches(m, new Set(m.actions)),
     );
     if (milestone)
-      return { text: text(milestone), href: `#m-${milestone.id}`, milestone };
+      return {
+        label: "Your turn",
+        text: text(milestone),
+        href: `#m-${milestone.id}`,
+        milestone,
+      };
   }
   const current = view.milestones.find((m) => !DONE.has(m.status));
-  if (!current) return { text: "All milestones paid.", waiting: true };
+  if (!current)
+    return { label: "Done", text: "All milestones paid.", waiting: true };
   const owner = view.role === "owner";
-  const waitingFor = {
-    PLANNED: owner ? "" : `${view.ownerName} to fund it`,
-    FUNDED: owner ? `${view.contractorName} to upload proof` : "",
-    IN_REVIEW: owner ? "" : `${view.ownerName} to review the proof`,
+  const waiting = {
+    PLANNED: owner ? null : [view.ownerName, "Funding for milestone"],
+    FUNDED: owner ? [view.contractorName, "Proof for milestone"] : null,
+    IN_REVIEW: owner
+      ? null
+      : [view.ownerName, "Review of the proof for milestone"],
   }[current.status];
   return {
-    text: waitingFor
-      ? `Waiting for ${waitingFor} · milestone ${current.seq}`
+    label: waiting ? `Waiting for ${waiting[0]}` : "Status",
+    text: waiting
+      ? `${waiting[1]} ${current.seq}`
       : `Milestone ${current.seq}: ${stage(current).label}`,
     href: `#m-${current.id}`,
     milestone: current,
@@ -801,12 +880,12 @@ function nextStep(view) {
 }
 
 function nextLink(step) {
-  const inner = html`<span class="next-label"
-      >${step.waiting ? "Now" : "Next"}</span
-    >
+  const inner = html`<span class="next-label">${step.label}</span>
     <span class="next-text">${step.text}</span>`;
   return step.href
-    ? html`<a class="next${step.waiting ? " next-wait" : ""}" href="${step.href}"
+    ? html`<a
+        class="next${step.waiting ? " next-wait" : ""}"
+        href="${step.href}"
         >${inner}<span class="chev-r" aria-hidden="true">›</span></a
       >`
     : html`<p class="next next-wait">${inner}</p>`;
@@ -993,7 +1072,11 @@ function page(view) {
     <div class="milestones">
       ${view.milestones.map((milestone) => milestoneCard(milestone, view))}
     </div>
-    ${changeOrdersCard(view, isOpen("extras", answerNeeded))}
+    ${changeOrdersCard(
+      view,
+      isOpen("extras", answerNeeded),
+      isOpen("extras-form"),
+    )}
     <details class="card fold" data-key="schedule" ${openAttr("schedule")}>
       <summary class="fold-head">
         <h2>Schedule</h2>
@@ -1063,7 +1146,7 @@ const CONFIRMATIONS = {
       warning = "The AI rejected the latest proof. ";
     return {
       title: `Release ${m.held.display}?`,
-      message: `${warning}${m.held.display} goes to the contractor through PayPal, minus the retention kept for snagging. This can't be undone.`,
+      message: `${warning}${m.held.display} goes to the contractor through PayPal, minus the retention kept for final fixes. This can't be undone.`,
       confirmLabel: warning
         ? `Release ${m.held.display} anyway`
         : "Release funds",
@@ -1073,15 +1156,15 @@ const CONFIRMATIONS = {
   cancel: (m) => ({
     title: "Cancel this milestone?",
     message: m.authorization?.expired
-      ? `The PayPal hold on ${m.held.display} already expired, so you were never charged for it. Money already paid to the supplier is not refunded here.`
-      : `The hold on ${m.held.display} is voided and you are not charged for it. Money already paid to the supplier is not refunded here.`,
+      ? `The authorization for ${m.held.display} already expired, so you were never charged for it. Money already paid to the supplier is not refunded here.`
+      : `The authorization for ${m.held.display} is voided and you are not charged for it. Money already paid to the supplier is not refunded here.`,
     confirmLabel: "Cancel milestone",
     danger: true,
   }),
   reject: () => ({
     title: "Ask for more proof",
     message:
-      "The money stays held. The contractor sees your reason and can upload new proof.",
+      "Nothing is charged: the money stays on hold. The contractor sees your reason and can upload new proof.",
     confirmLabel: "Send back",
     reason: {
       label: "What is missing?",
@@ -1103,8 +1186,8 @@ const CONFIRMATIONS = {
 
 const BODILESS = {
   approve: "Funds released through PayPal.",
-  cancel: "Milestone cancelled. You were not charged for the held part.",
-  reauthorize: "Hold renewed for another period.",
+  cancel: "Milestone cancelled. You were not charged for the part on hold.",
+  reauthorize: "Authorization renewed for another period.",
   "release-retention": "Retention paid to the contractor.",
   "submit-evidence": "Evidence pack sent to PayPal.",
   "retry-upfront": "Supplier payment retried.",
@@ -1158,6 +1241,10 @@ async function handleAction(button) {
     await decideChangeOrder(button, act === "co-accept");
     return;
   }
+  if (act === "co-withdraw") {
+    await withdrawChangeOrder(button);
+    return;
+  }
   if (!milestone) return;
   remember(`m-${milestone.id}`, true);
 
@@ -1175,7 +1262,7 @@ async function handleAction(button) {
       } catch (error) {
         if (decline && error instanceof ApiError) {
           toast(
-            `Card declined by PayPal (${error.message}). Nothing was held or charged.`,
+            `Card declined by PayPal (${error.message}). Nothing was authorized or charged.`,
             "error",
           );
           show(await fetchView());
@@ -1223,9 +1310,13 @@ async function proposeChangeOrder(form) {
     toast("Describe the extra in a few words.", "error");
     return;
   }
-  if (priceCents === null || priceCents > MAX_EXTRA_EUR * 100) {
+  if (
+    priceCents === null ||
+    priceCents > MAX_EXTRA_EUR * 100 ||
+    (priceCents > 0 && priceCents < MIN_EXTRA_EUR * 100)
+  ) {
     toast(
-      `Enter a price between €0 and €${MAX_EXTRA_EUR.toLocaleString("en-IE")}, like 120 or 120.50.`,
+      `Enter €0 for a free change, or a price from €${MIN_EXTRA_EUR} to €${MAX_EXTRA_EUR.toLocaleString("en-IE")}, like 120 or 120.50.`,
       "error",
     );
     return;
@@ -1287,6 +1378,30 @@ async function decideChangeOrder(button, accept) {
   });
 }
 
+/** @param {HTMLButtonElement} button */
+async function withdrawChangeOrder(button) {
+  const changeOrder = state.view?.changeOrders?.find(
+    (item) => item.id === button.dataset.changeOrder,
+  );
+  if (!changeOrder) return;
+  const answer = await ask({
+    title: `Withdraw extra #${changeOrder.seq}?`,
+    message: `"${changeOrder.description}" is taken back before anyone agrees to it, so it can't be paid. This is recorded in the audit trail.`,
+    confirmLabel: "Withdraw",
+    danger: true,
+  });
+  if (answer === null) return;
+  await whileBusy(button, async () => {
+    show(
+      await api(
+        changeOrdersPath(`/${encodeURIComponent(changeOrder.id)}/withdraw`),
+        { method: "POST", body: {}, token: token() },
+      ),
+    );
+    toast("Extra withdrawn.");
+  });
+}
+
 /** @param {HTMLFormElement} form */
 async function handleUpload(form) {
   const milestoneId = form.dataset.upload;
@@ -1315,7 +1430,7 @@ async function handleUpload(form) {
     const messages = {
       release: ["AI approved the proof. Funds released through PayPal.", "ok"],
       review: ["Proof sent to the homeowner for a decision.", "info"],
-      reject: ["Proof rejected. The money stays held.", "error"],
+      reject: ["Proof rejected. The money stays on hold.", "error"],
     };
     const [message, kind] = messages[outcome.decision] ?? [
       "Proof submitted.",
@@ -1352,7 +1467,10 @@ app.addEventListener("click", (event) => {
   }
   const anchor = target.closest('a[href^="#"]');
   if (anchor instanceof HTMLAnchorElement) {
-    const goal = anchor.hash.length > 1 && !anchor.hash.startsWith("#t=") ? document.querySelector(`#${CSS.escape(anchor.hash.slice(1))}`) : null;
+    const goal =
+      anchor.hash.length > 1 && !anchor.hash.startsWith("#t=")
+        ? document.querySelector(`#${CSS.escape(anchor.hash.slice(1))}`)
+        : null;
     if (goal instanceof HTMLDetailsElement) {
       event.preventDefault();
       goal.open = true;
@@ -1374,6 +1492,7 @@ app.addEventListener("click", (event) => {
   }
   const button = target.closest("button[data-act]");
   if (button instanceof HTMLButtonElement) {
+    state.restore = focusSelectors(button);
     handleAction(button).catch(reportError);
   }
 });
@@ -1381,6 +1500,9 @@ app.addEventListener("click", (event) => {
 app.addEventListener("submit", (event) => {
   const form = event.target;
   if (!(form instanceof HTMLFormElement)) return;
+  state.restore = focusSelectors(
+    form.querySelector("button[type=submit]") ?? form,
+  );
   if (form.dataset.upload) {
     event.preventDefault();
     handleUpload(form).catch(reportError);
@@ -1453,8 +1575,8 @@ async function boot() {
       html`<div class="card empty">
         <h1 style="font-size:24px;margin-bottom:8px">Open your private link</h1>
         <p>
-          This project can only be opened with the link its owner shared with
-          you.
+          This project can only be opened with the link its homeowner shared
+          with you.
         </p>
         <a class="btn btn-primary" href="/">Go to RealPay</a>
       </div>`,
@@ -1467,17 +1589,32 @@ async function boot() {
     show(await fetchView());
     persist();
   } catch (error) {
-    const message =
-      error instanceof ApiError && error.status === 404
-        ? "This project does not exist."
-        : "We couldn't open this project.";
+    const missing = error instanceof ApiError && error.status === 404;
     render(
       app,
-      html`<div class="card empty">
-        <h1 style="font-size:24px">${message}</h1>
-        <p>${error.message}</p>
-      </div>`,
+      missing
+        ? html`<div class="card empty">
+            <h1 style="font-size:24px">We can't find this project.</h1>
+            <p>The link may be wrong or expired.</p>
+            <a class="btn btn-secondary" href="/">Back to RealPay</a>
+          </div>`
+        : html`<div class="card empty">
+            <h1 style="font-size:24px">We couldn't open this project.</h1>
+            <p>
+              ${
+                error instanceof ApiError
+                  ? error.message
+                  : "Check your connection and try again."
+              }
+            </p>
+            <button type="button" class="btn btn-primary" data-retry>
+              Try again
+            </button>
+          </div>`,
     );
+    app
+      .querySelector("[data-retry]")
+      ?.addEventListener("click", () => location.reload());
     return;
   }
 

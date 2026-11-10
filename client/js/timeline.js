@@ -1,9 +1,10 @@
 import { formatCents, html, raw } from "./format.js";
 
 /* ######################################################################
- * Balance: where the money is, at a glance. One big figure (what PayPal
- * holds right now), a bar that splits the plan into released, held and
- * not yet funded, and one chip per milestone that jumps to its card.
+ * Balance: where the money is, at a glance. One big figure (what is on
+ * hold: authorized on the homeowner's PayPal, not charged yet), a bar that
+ * splits the plan into released, retention, on hold and not yet funded,
+ * and one chip per milestone that jumps to its card.
  * ###################################################################### */
 
 const ICON = (paths) =>
@@ -34,7 +35,7 @@ function cents(value) {
 }
 
 /**
- * Where a milestone stands, as the stepper shows it.
+ * Where a milestone stands, as its chip and card show it.
  * @returns {{ key: string, step: number, label: string, detail: string }}
  */
 export function stage(milestone) {
@@ -55,7 +56,7 @@ export function stage(milestone) {
         return {
           key: "warn",
           step: 1,
-          label: "Hold expired",
+          label: "Authorization expired",
           detail: "Fund again to continue",
         };
       if (disputed)
@@ -63,23 +64,23 @@ export function stage(milestone) {
           key: "warn",
           step: 1,
           label: "In dispute",
-          detail: `${held} still held`,
+          detail: `${held} still on hold`,
         };
       if (milestone.status === "IN_REVIEW")
         return {
           key: "checking",
           step: 2,
           label: "Checking proof",
-          detail: `${held} held meanwhile`,
+          detail: `${held} on hold meanwhile`,
         };
       return {
         key: "held",
         step: 1,
-        label: "Held by PayPal",
+        label: "On hold",
         detail:
           milestone.proofs.at(-1)?.decision === "reject"
-            ? `Proof rejected · ${held} still held`
-            : `${held} held · waiting for proof`,
+            ? `Proof rejected · ${held} still on hold`
+            : `${held} on hold · waiting for proof`,
       };
     }
     case "RELEASED": {
@@ -89,7 +90,7 @@ export function stage(milestone) {
         label: "Released",
         detail:
           milestone.retention.status === "held"
-            ? `${milestone.retention.display} kept for snagging`
+            ? `${milestone.retention.display} retention for final fixes`
             : "Paid",
       };
     }
@@ -106,18 +107,19 @@ export function stage(milestone) {
         key: "cancelled",
         step: -1,
         label: "Cancelled",
-        detail: "Not charged for the held part",
+        detail: "Not charged for the part on hold",
       };
     }
   }
 }
 
-/** Released, held and not-yet-funded money, in cents. */
+/** Released, retention, on-hold and not-yet-funded money, in cents. */
 export function buckets(milestones) {
   const sums = {
     released: 0,
     upfront: 0,
     upfrontStuck: 0,
+    retention: 0,
     held: 0,
     notFunded: 0,
   };
@@ -137,9 +139,15 @@ export function buckets(milestones) {
       continue;
     }
     sums.released += upfront;
-    if (milestone.status === "RELEASED" || milestone.status === "CLOSED")
-      sums.released += held;
-    else if (milestone.status === "CANCELLED") continue;
+    if (milestone.status === "RELEASED" || milestone.status === "CLOSED") {
+      // Retention still kept back is its own bucket, not "released".
+      const retention =
+        milestone.retention.status === "held"
+          ? cents(milestone.retention.value)
+          : 0;
+      sums.released += held - retention;
+      sums.retention += retention;
+    } else if (milestone.status === "CANCELLED") continue;
     else if (milestone.authorization?.expired) sums.notFunded += held;
     else sums.held += held;
   }
@@ -148,16 +156,14 @@ export function buckets(milestones) {
 
 /**
  * What "released" is made of, in the same terms as the totals below it:
- * labour to the contractor, materials paid up front, and the retention
- * kept back for snagging.
+ * labour to the contractor and materials paid up front. Retention for
+ * final fixes is not released yet, so it has its own bucket.
  */
 export function releasedNote(view, sums) {
-  const retention = cents(view.totals.retention.value);
-  const labour = sums.released - sums.upfront - retention;
+  const labour = sums.released - sums.upfront;
   const paidOut = sums.upfront - sums.upfrontStuck;
   return [
     labour > 0 && `${formatCents(labour)} to ${view.contractorName}`,
-    retention > 0 && `${formatCents(retention)} retention`,
     paidOut > 0 && `${formatCents(paidOut)} materials up front`,
     sums.upfrontStuck > 0 &&
       `${formatCents(sums.upfrontStuck)} materials, supplier payout to retry`,
@@ -167,31 +173,44 @@ export function releasedNote(view, sums) {
 }
 
 /**
- * The PayPal-style balance card at the top of the project.
+ * The balance card at the top of the project.
  * @param {any} view
  * @param {{ next?: unknown, details?: unknown }} [slots]
  */
 export function balanceHero(view, { next = "", details = "" } = {}) {
   const sums = buckets(view.milestones);
-  const total = sums.released + sums.held + sums.notFunded;
+  const total = sums.released + sums.retention + sums.held + sums.notFunded;
   const percent = (part) => (total ? (part / total) * 100 : 0);
   const parts = [
     { key: "released", label: "Released", value: sums.released },
-    { key: "held", label: "Held by PayPal", value: sums.held },
+    {
+      key: "retention",
+      label: "Retention (final fixes)",
+      value: sums.retention,
+    },
+    { key: "held", label: "On hold", value: sums.held },
     { key: "unfunded", label: "Not yet funded", value: sums.notFunded },
   ];
   const summary = parts
     .map((part) => `${part.label} ${formatCents(part.value)}`)
     .join(", ");
-  return html`<section class="card balance" aria-labelledby="timeline-title">
+  return html`<section class="card balance" aria-labelledby="balance-title">
     <div class="balance-top">
-      <span id="timeline-title" class="balance-label">Held in PayPal</span>
-      <span class="balance-tag">Built on PayPal · sandbox</span>
+      <span id="balance-title" class="balance-label">On hold</span>
+      <span class="balance-hint"
+        >Authorized on the homeowner's PayPal, not charged yet</span
+      >
     </div>
     <div class="balance-amount">${formatCents(sums.held)}</div>
     <p class="balance-sub">
       <span class="dot dot-released" aria-hidden="true"></span
       >${formatCents(sums.released)} released
+      ${
+        sums.retention > 0
+          ? html`<span class="dot dot-retention" aria-hidden="true"></span
+              >${formatCents(sums.retention)} retention (final fixes)`
+          : ""
+      }
       <span class="dot dot-unfunded" aria-hidden="true"></span
       >${formatCents(sums.notFunded)} to fund
       <span class="balance-of">of ${formatCents(total)}</span>

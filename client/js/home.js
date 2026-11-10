@@ -80,7 +80,12 @@ function recentList() {
                 >
                 <span class="small muted">
                   · as
-                  ${project.active ?? (project.owner ? "owner" : "contractor")}</span
+                  ${
+                    (project.active ??
+                      (project.owner ? "owner" : "contractor")) === "owner"
+                      ? "homeowner"
+                      : "contractor"
+                  }</span
                 >
               </li>`,
           )}
@@ -111,22 +116,30 @@ templatesHost.addEventListener("submit", (event) => {
   }).catch((error) => toast(error.message, "error"));
 });
 
-async function boot() {
-  recentList();
+async function loadTemplates() {
   try {
     const { templates } = await api("/api/templates");
     render(
       templatesHost,
       html`${templates.map((template) => templateCard(template))}`,
     );
-  } catch (error) {
+  } catch {
     render(
       templatesHost,
       html`<div class="card empty">
-        Templates could not load: ${error.message}
+        <p>
+          We couldn't load the templates. Check your connection and try again.
+        </p>
+        <button type="button" class="btn btn-primary" data-retry>
+          Try again
+        </button>
       </div>`,
     );
+    templatesHost
+      .querySelector("[data-retry]")
+      ?.addEventListener("click", loadTemplates, { once: true });
   }
 }
 
-await boot();
+recentList();
+await loadTemplates();

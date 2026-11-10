@@ -9,7 +9,7 @@
   --surface-2: #eef2f7;
   --ink: #0e1a2b;
   --ink-2: #4a5a70;
-  --ink-3: #7b8aa0;
+  --ink-3: #5d6b80;
   --line: #dde3ec;
   --brand: #0f2a4a;
   --brand-ink: #ffffff;
@@ -23,6 +23,9 @@
   --bad-soft: #fde8e6;
   --held: #5b3fd1;
   --held-soft: #efebfd;
+  /* Text on a solid --ok or --bad fill. */
+  --on-ok: #fff;
+  --on-bad: #fff;
   --radius: 14px;
   --radius-sm: 9px;
   --shadow: 0 1px 2px rgb(14 26 43 / 6%), 0 8px 24px rgb(14 26 43 / 6%);
@@ -52,6 +55,8 @@
     --bad-soft: #3a1714;
     --held: #a995ff;
     --held-soft: #221a45;
+    --on-ok: #04291b;
+    --on-bad: #3a0b07;
     --shadow: 0 1px 2px rgb(0 0 0 / 30%), 0 8px 24px rgb(0 0 0 / 25%);
     color-scheme: dark;
   }
@@ -146,10 +151,11 @@ select {
   font-size: 13px;
 }
 
-.secured svg {
-  width: 16px;
-  height: 16px;
-  color: var(--ok);
+.secured-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-3);
 }
 
 .container {
@@ -244,7 +250,7 @@ select {
 
 .btn-ok {
   background: var(--ok);
-  color: #fff;
+  color: var(--on-ok);
 }
 
 .btn-link {
@@ -369,18 +375,6 @@ select {
 
 .flow .card {
   padding: 18px;
-}
-
-.flow .step {
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 800;
-  margin-bottom: 10px;
 }
 
 .flow h3 {
@@ -1045,12 +1039,12 @@ details > summary {
 
 .toast-error {
   background: var(--bad);
-  color: #fff;
+  color: var(--on-bad);
 }
 
 .toast-ok {
   background: var(--ok);
-  color: #fff;
+  color: var(--on-ok);
 }
 
 @keyframes toast-in {
@@ -1088,49 +1082,10 @@ details > summary {
   gap: 14px;
 }
 
-.extras-head {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-}
-
-.extras-head h2 {
-  font-size: 18px;
-}
-
 .extras-lead {
   margin: 0;
   max-width: 68ch;
   color: var(--ink-2);
-}
-
-.extras-rules {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 18px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.extras-rules li {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.extras-rules li::before {
-  display: inline-grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  font-size: 12px;
-  font-weight: 800;
 }
 
 .rule-ok {
@@ -1232,8 +1187,13 @@ details > summary {
   font-variant-numeric: tabular-nums;
 }
 
-.extras-empty {
-  margin: 0;
+.extras-propose > summary.btn {
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.extras-propose[open] > summary {
+  margin-bottom: 12px;
 }
 
 .extras-form {
@@ -1270,34 +1230,6 @@ details > summary {
   align-items: end;
 }
 
-/* ---------- Timeline ---------- */
-
-.timeline {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 18px;
-  margin-top: 20px;
-  padding: 20px;
-}
-
-.money {
-  display: grid;
-  gap: 10px;
-}
-
-.money-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 4px 16px;
-}
-
-.money-head h2 {
-  margin: 0;
-  font-size: 18px;
-}
-
 .money-bar {
   display: flex;
   height: 14px;
@@ -1327,272 +1259,12 @@ details > summary {
   background: var(--held);
 }
 
+.seg-retention {
+  background: var(--warn);
+}
+
 .seg-unfunded {
   background: transparent;
-}
-
-.money-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 22px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: 14px;
-}
-
-.money-legend li {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.money-legend strong {
-  font-family: var(--font-display);
-  font-variant-numeric: tabular-nums;
-}
-
-.leg-dot {
-  flex: none;
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
-  transform: translateY(1px);
-}
-
-.leg-released .leg-dot {
-  background: var(--ok);
-}
-
-.leg-held .leg-dot {
-  background: var(--held);
-}
-
-.leg-unfunded .leg-dot {
-  background: repeating-linear-gradient(
-    -45deg,
-    var(--surface-2) 0 2px,
-    var(--ink-3) 2px 3px
-  );
-  box-shadow: inset 0 0 0 1px var(--ink-3);
-}
-
-.leg-released strong {
-  color: var(--ok);
-}
-
-.leg-held strong {
-  color: var(--held);
-}
-
-.stepper {
-  --gap: 14px;
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(178px, 1fr);
-  gap: var(--gap);
-  /* room for the "Now" tag and the focus ring, which the scroller would clip */
-  margin: -4px -6px 0;
-  padding: 12px 6px 6px;
-  list-style: none;
-  overflow-x: auto;
-}
-
-.step {
-  --tone: var(--ink-3);
-  --tone-soft: var(--surface-2);
-  position: relative;
-  display: flex;
-}
-
-.step-held {
-  --tone: var(--held);
-  --tone-soft: var(--held-soft);
-}
-
-.step-checking {
-  --tone: var(--accent);
-  --tone-soft: var(--accent-soft);
-}
-
-.step-released {
-  --tone: var(--ok);
-  --tone-soft: var(--ok-soft);
-}
-
-.step-warn {
-  --tone: var(--warn);
-  --tone-soft: var(--warn-soft);
-}
-
-.step-cancelled {
-  --tone: var(--bad);
-  --tone-soft: var(--bad-soft);
-}
-
-/* the line joining one step to the next; solid once the step is done */
-.step:not(:last-child)::after {
-  content: "";
-  position: absolute;
-  top: 27px;
-  left: 100%;
-  width: var(--gap);
-  height: 2px;
-  background: var(--line);
-}
-
-.step.is-done:not(:last-child)::after {
-  background: var(--tone);
-}
-
-.step a {
-  display: grid;
-  align-content: start;
-  gap: 3px;
-  width: 100%;
-  padding: 12px 14px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--ink);
-  text-decoration: none;
-  transition:
-    border-color 0.15s,
-    box-shadow 0.15s;
-}
-
-.step a:hover {
-  border-color: var(--tone);
-}
-
-.step a:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.step.is-current a {
-  border: 2px solid var(--accent);
-  padding: 11px 13px;
-  box-shadow: 0 0 0 4px var(--accent-soft);
-}
-
-.step-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-
-.step-badge {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  background: var(--tone-soft);
-  color: var(--tone);
-}
-
-.step-released .step-badge {
-  background: var(--ok);
-  color: var(--surface);
-}
-
-.step-num {
-  white-space: nowrap;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-}
-
-.step-now {
-  position: absolute;
-  top: -9px;
-  right: 12px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--surface);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.step-title {
-  display: -webkit-box;
-  overflow: hidden;
-  font-weight: 700;
-  line-height: 1.3;
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.step-amount {
-  font-family: var(--font-display);
-  font-size: 18px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-}
-
-.step-late {
-  color: var(--warn);
-  font-weight: 700;
-}
-
-.step-state {
-  margin-top: 6px;
-  font-size: 13px;
-  font-weight: 800;
-  color: var(--tone);
-}
-
-.step-planned .step-state {
-  color: var(--ink-2);
-}
-
-.step-detail {
-  color: var(--ink-2);
-}
-
-.step-track {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 3px;
-  margin-top: 8px;
-}
-
-.step-track span {
-  height: 4px;
-  border-radius: 2px;
-  background: var(--surface-2);
-}
-
-.step-track .on {
-  background: var(--tone);
-}
-
-.step-key {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 6px;
-  margin: 0;
-}
-
-.step-key .step-icon {
-  width: 14px;
-  height: 14px;
-  margin-left: 8px;
-  color: var(--ink-3);
-}
-
-.step-key .step-icon:first-child {
-  margin-left: 0;
 }
 
 /* ---------- Responsive ---------- */
@@ -1641,68 +1313,12 @@ details > summary {
     grid-template-columns: 1fr;
   }
 
-  .secured span {
-    display: none;
+  .role-switch {
+    width: 100%;
   }
 
-  .timeline {
-    padding: 16px 14px;
-  }
-
-  /* the stepper reads top to bottom on a phone */
-  .stepper {
-    grid-auto-flow: row;
-    grid-auto-columns: auto;
-    grid-template-columns: minmax(0, 1fr);
-    --gap: 10px;
-    overflow: visible;
-  }
-
-  .step:not(:last-child)::after {
-    top: 100%;
-    left: 29px;
-    width: 2px;
-    height: var(--gap);
-  }
-
-  /* compact rows: icon on the left, amount on the right */
-  .step a {
-    grid-template-columns: 30px minmax(0, 1fr) auto;
-    gap: 2px 10px;
-  }
-
-  .step-top {
-    display: contents;
-  }
-
-  .step-badge {
-    grid-area: 1 / 1 / span 5;
-    align-self: start;
-  }
-
-  .step-num {
-    grid-area: 1 / 2;
-    align-self: center;
-  }
-
-  .step-amount {
-    grid-area: 1 / 3;
-    font-size: 16px;
-  }
-
-  .step-title,
-  .step-dates,
-  .step-state,
-  .step-detail {
-    grid-column: 2 / -1;
-  }
-
-  .step-state {
-    margin-top: 2px;
-  }
-
-  .step-track {
-    display: none;
+  .role-switch button {
+    flex: 1;
   }
 
   .extras {
@@ -1833,15 +1449,15 @@ dialog .btn-row {
 }
 
 /* ######################################################################
- * Redesign layer (11 Nov). Money looks like PayPal: navy balance card,
- * one big figure, pill buttons. AI looks like M.A.S: black, orange,
- * Michroma label. Everything else folds away until it is needed.
+ * Redesign layer (11 Nov). Money: a RealPay navy balance card, one big
+ * figure, pill buttons; PayPal blue is kept for links and focus only.
+ * AI looks like M.A.S: black, orange, Michroma label. Everything else folds away until it is needed.
  * ###################################################################### */
 
 :root {
-  --pp-navy: #001c64;
-  --pp-navy-2: #003087;
-  --pp-blue: #0070e0;
+  /* RealPay navy, the same in both themes: the balance card is always dark. */
+  --rp-navy: #0f2a4a;
+  --rp-navy-2: #1d4170;
   --mas-orange: #ef751f;
   --mas-orange-2: #e35205;
   --mas-black: #0b0b0c;
@@ -1958,7 +1574,7 @@ details[open] > summary .chev {
   margin: 0 0 8px;
 }
 
-/* ---------- Balance (PayPal) ---------- */
+/* ---------- Balance ---------- */
 
 .balance {
   display: grid;
@@ -1966,15 +1582,20 @@ details[open] > summary .chev {
   padding: 24px;
   border: 0;
   color: #fff;
-  background: linear-gradient(135deg, var(--pp-navy), var(--pp-navy-2));
-  box-shadow: 0 10px 30px rgb(0 28 100 / 28%);
+  background: linear-gradient(135deg, var(--rp-navy), var(--rp-navy-2));
+  box-shadow: 0 10px 30px rgb(15 42 74 / 28%);
+}
+
+.balance :focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 2px;
 }
 
 .balance-top {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
 }
 
 .balance-label {
@@ -1983,13 +1604,9 @@ details[open] > summary .chev {
   opacity: 0.85;
 }
 
-.balance-tag {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  padding: 3px 10px;
-  border-radius: 999px;
-  background: rgb(255 255 255 / 12%);
+.balance-hint {
+  font-size: 13px;
+  opacity: 0.8;
 }
 
 .balance-amount {
@@ -2030,6 +1647,10 @@ details[open] > summary .chev {
   background: rgb(255 255 255 / 40%);
 }
 
+.dot-retention {
+  background: #f5c26b;
+}
+
 .balance .money-bar {
   height: 10px;
   background: rgb(255 255 255 / 14%);
@@ -2043,8 +1664,12 @@ details[open] > summary .chev {
   background: #8fc2ff;
 }
 
+.balance .seg-retention {
+  background: #f5c26b;
+}
+
 .balance .money-seg + .money-seg {
-  border-left-color: var(--pp-navy);
+  border-left-color: var(--rp-navy);
 }
 
 .chips {
@@ -2090,12 +1715,13 @@ details[open] > summary .chev {
 .chip-held {
   background: #8fc2ff;
   border-color: #8fc2ff;
-  color: var(--pp-navy);
+  color: var(--rp-navy);
 }
 
 .chip-checking {
   background: var(--mas-orange);
   border-color: var(--mas-orange);
+  color: #2b1100;
 }
 
 .chip-warn {
@@ -2117,7 +1743,7 @@ details[open] > summary .chev {
   padding: 8px 10px 8px 8px;
   border-radius: 999px;
   background: #fff;
-  color: var(--pp-navy);
+  color: var(--rp-navy);
   font-weight: 700;
   text-decoration: none;
 }
@@ -2128,9 +1754,10 @@ details[open] > summary .chev {
 
 .next-label {
   flex: none;
+  max-width: 55%;
   padding: 6px 12px;
   border-radius: 999px;
-  background: var(--pp-blue);
+  background: var(--rp-navy);
   color: #fff;
   font-size: 12px;
   text-transform: uppercase;
@@ -2518,6 +2145,11 @@ details[open] > summary .chev {
 .hero p {
   margin: 12px auto 22px;
   font-size: 18px;
+}
+
+.hero-link {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .how {
