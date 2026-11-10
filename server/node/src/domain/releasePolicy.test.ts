@@ -70,7 +70,7 @@ describe("decideRelease", () => {
   it("rejects on any hard flag, whatever the AI says", () => {
     const result = decideRelease(input({ hardFlags: ["duplicate_proof"] }));
     expect(result.decision).toBe("reject");
-    expect(result.reason).toContain("duplicate_proof");
+    expect(result.reason).toContain("already submitted");
   });
 
   it("never auto-releases with a soft flag", () => {
@@ -88,7 +88,7 @@ describe("decideRelease", () => {
 });
 
 describe("retention maths", () => {
-  it("keeps 5 % of the held amount back as warranty and pays the rest", () => {
+  it("keeps 5 % of the held amount back as a snagging retention and pays the rest", () => {
     const heldCents = 30_000;
     const retentionCents = percentOf(heldCents, 500);
     expect(retentionCents).toBe(1500);

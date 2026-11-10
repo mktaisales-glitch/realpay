@@ -200,6 +200,7 @@ select {
   border-radius: 999px;
   border: 1px solid transparent;
   font-weight: 600;
+  text-decoration: none;
   cursor: pointer;
   transition:
     background 0.15s,

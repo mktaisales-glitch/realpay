@@ -344,6 +344,21 @@ export function proofHashExists(
   return Boolean(row);
 }
 
+/** How many AI verdicts a project has asked for since `since` (ISO time). */
+export function countAiVerdictsSince(
+  db: Db,
+  projectId: string,
+  since: string,
+): number {
+  const row = db
+    .prepare<[string, string], { total: number }>(
+      `SELECT COUNT(*) AS total FROM ledger
+       WHERE project_id = ? AND action = 'ai_verdict' AND created_at >= ?`,
+    )
+    .get(projectId, since);
+  return row?.total ?? 0;
+}
+
 export function getPayout(
   db: Db,
   milestoneId: string,

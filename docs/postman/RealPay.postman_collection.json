@@ -581,7 +581,7 @@
                 "release-retention"
               ]
             },
-            "description": "Owner token. The 30-day warranty period has not ended yet."
+            "description": "Owner token. The 30-day retention period has not ended yet."
           },
           "response": []
         },

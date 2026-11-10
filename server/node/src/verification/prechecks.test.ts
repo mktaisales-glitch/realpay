@@ -56,12 +56,12 @@ describe("sniffMimeType", () => {
 });
 
 describe("runPrechecks", () => {
-  it("passes a clean PDF for a document milestone", async () => {
+  it("accepts a clean PDF for a document milestone, but only for a person to sign off", async () => {
     const result = await checks();
     expect(result).toMatchObject({
       mimeType: "application/pdf",
       hardFlags: [],
-      softFlags: [],
+      softFlags: ["document_needs_human_check"],
     });
     expect(result.sha256).toMatch(/^[a-f0-9]{64}$/);
   });

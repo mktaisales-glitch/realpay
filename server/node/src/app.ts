@@ -45,7 +45,7 @@ export type AppDependencies = {
 export function createApp({ config, db, service, templates }: AppDependencies) {
   const app = express();
   app.disable("x-powered-by");
-  app.set("trust proxy", 1);
+  app.set("trust proxy", config.TRUST_PROXY);
 
   /* ######################################################################
    * Security headers. The PayPal JS SDK needs its own origins for

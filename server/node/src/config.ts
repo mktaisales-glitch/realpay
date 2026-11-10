@@ -37,11 +37,20 @@ const configSchema = z.object({
   OPENROUTER_API_KEY: optionalString,
   OPENROUTER_MODEL: z.string().default("nvidia/nemotron-3.5-super-vl:free"),
   AI_DAILY_CAP: z.coerce.number().int().nonnegative().default(150),
+  AI_CALLS_PER_PROJECT_PER_DAY: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(10),
 
   PORT: z.coerce.number().int().positive().default(8080),
   DATABASE_PATH: z.string().default("data/realpay.db"),
   UPLOAD_DIR: z.string().default("data/uploads"),
   PUBLIC_BASE_URL: z.url().default("http://localhost:8080"),
+  // Number of reverse proxies in front of the app (1 on Render). Rate
+  // limits key on the client IP, so trusting a proxy that is not there
+  // would let anyone pick their own IP with X-Forwarded-For.
+  TRUST_PROXY: z.coerce.number().int().nonnegative().default(0),
 
   DEMO_MODE: z.stringbool().default(false),
   DEMO_TEST_CARD: optionalString,

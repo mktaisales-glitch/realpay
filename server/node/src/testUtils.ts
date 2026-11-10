@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { CardRequest } from "@paypal/paypal-server-sdk";
 import { vi } from "vitest";
@@ -60,20 +61,20 @@ export const testTemplate: Template = templateSchema.parse({
   site: { lat: 41.3874, lng: 2.1686, radiusMeters: 500 },
   milestones: [
     {
-      title: "Electrical certificate",
+      title: "Strip-out",
       durationDays: 2,
-      proofType: "document",
-      upfront: { label: "Certification fee", eur: 100 },
-      held: { label: "Electrician sign-off", eur: 300 },
-      checklist: ["Signed by a registered installer"],
+      proofType: "photo",
+      upfront: { label: "Skip hire", eur: 100 },
+      held: { label: "Strip-out labour", eur: 300 },
+      checklist: ["Old tiles removed down to the wall"],
     },
     {
       title: "Tiling and finishes",
       durationDays: 5,
-      proofType: "document",
+      proofType: "photo",
       upfront: { label: "Tiles and grout", eur: 500 },
       held: { label: "Tiling labour", eur: 1000 },
-      checklist: ["Tiling invoice and completion report"],
+      checklist: ["Wall tiled and grouted"],
     },
   ],
 });
@@ -179,7 +180,10 @@ export function createFakeVerifier() {
 }
 
 /** A service wired to fakes, an in-memory DB and a temp upload folder. */
-export function createTestService({ demoMode = false } = {}) {
+export function createTestService({
+  demoMode = false,
+  aiCallsPerProjectPerDay,
+}: { demoMode?: boolean; aiCallsPerProjectPerDay?: number } = {}) {
   const db = openDatabase(":memory:");
   const paypal = createFakeGateway();
   const verifier = createFakeVerifier();
@@ -193,6 +197,7 @@ export function createTestService({ demoMode = false } = {}) {
     contractorEmail: CONTRACTOR_EMAIL,
     uploadDir,
     demoMode,
+    aiCallsPerProjectPerDay,
     now: () => FIXED_NOW,
   });
 
@@ -256,6 +261,18 @@ export function createTestApp({ demoMode = false } = {}) {
 
 export function pdfProof(label: string): Buffer {
   return Buffer.from(`%PDF-1.4\n% ${label}\n%%EOF\n`, "latin1");
+}
+
+const SITE_PHOTO = readFileSync(
+  fileURLToPath(new URL("testFixtures/site-photo.jpg", import.meta.url)),
+);
+
+/**
+ * A JPEG taken on the test site on FIXED_NOW (EXIF date and GPS). The label
+ * is appended after the image so every proof has its own SHA-256.
+ */
+export function sitePhoto(label: string): Buffer {
+  return Buffer.concat([SITE_PHOTO, Buffer.from(label, "latin1")]);
 }
 
 export function pngProof(): Buffer {

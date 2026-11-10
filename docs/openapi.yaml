@@ -18,7 +18,7 @@ info:
     4. **Release.** On `release` (or when the owner approves) the held part is captured
        (`final_capture: true`) and paid out to the contractor **minus the retention**
        (5% in the bundled templates).
-    5. **Retention.** The retention is paid out after the warranty period, or refunded to
+    5. **Retention.** The retention is paid out after the retention period, or refunded to
        the owner from the held capture.
 
     Cancelling a funded milestone voids the remaining authorization. Every money movement
@@ -41,10 +41,15 @@ info:
     ### Errors
     Application errors use one shape, `{ "error", "errorDescription", "details"? }`:
     `error` is a stable machine-readable code (for example `INVALID_MILESTONE_STATE`).
-    Request validation failures return `400` with `error: "Bad Request"`. Errors returned
-    by PayPal itself are forwarded **unchanged, with PayPal's own status code and body**
-    (including `debug_id`), see `PayPalError`. Unknown paths under `/api` and `/paypal-api`
-    return `404 {"error": "Not Found", "errorDescription": "No such endpoint."}`.
+    Request validation failures return `400` with `error: "Bad Request"`; a body that is
+    not valid JSON returns `400` too, and one over the size limit `413 PAYLOAD_TOO_LARGE`.
+    Rate limits answer `429 TOO_MANY_REQUESTS`. Errors returned by PayPal become
+    `error: "PAYPAL_ERROR"` with PayPal's own description and
+    `details: { name, debugId, issue }`, so a support ticket can quote PayPal's `debug_id`.
+    They keep PayPal's status (for example `422`), except a PayPal outage (`5xx`) or PayPal
+    refusing the platform's credentials (`401`), which return `502` because they are not
+    the caller's fault. Unknown paths under `/api` and `/paypal-api` return
+    `404 {"error": "Not Found", "errorDescription": "No such endpoint."}`.
 
     ### Money
     Amounts are integer euro cents internally and are returned as
@@ -53,7 +58,7 @@ info:
     ### Demo controls
     Operations tagged **Demo** (`x-demo-only: true`) exist only when the server runs with
     `DEMO_MODE=true`; otherwise they answer `404 NOT_FOUND` ("Demo controls are disabled.")
-    after authentication. RealPay is a hackathon project and only ever talks to the PayPal
+    before any token is checked. RealPay is a hackathon project and only ever talks to the PayPal
     **sandbox**.
   license:
     name: See LICENSE in the repository
@@ -75,7 +80,7 @@ tags:
   - name: Proofs
     description: Proof-of-work uploads, AI verification and owner rejection.
   - name: Retention
-    description: The warranty retention kept back from each release.
+    description: The snagging retention kept back from each release.
   - name: Disputes
     description: Evidence pack and evidence submission for PayPal disputes.
   - name: Webhooks
@@ -549,9 +554,9 @@ paths:
     post:
       tags: [Retention]
       operationId: releaseRetention
-      summary: Release the warranty retention
+      summary: Release the snagging retention
       description: |
-        Pays the retention out to the contractor once the warranty period has ended
+        Pays the retention out to the contractor once the retention period has ended
         (`retention.releaseAt` <= project `today`). On a successful payout the milestone
         becomes `CLOSED` with `retention.status: paid`; if the payout fails it stays
         `RELEASED` and can be retried with `retry-payout` (`kind: retention`).
@@ -573,7 +578,7 @@ paths:
             - `INVALID_MILESTONE_STATE`: status is not `RELEASED`.
             - `DISPUTE_OPEN`: a PayPal dispute is open.
             - `NO_RETENTION_HELD`: there is no retention held.
-            - `RETENTION_NOT_DUE`: the warranty period has not ended (`details.releaseAt`).
+            - `RETENTION_NOT_DUE`: the retention period has not ended (`details.releaseAt`).
             - `MILESTONE_BUSY`: another request is processing this milestone.
           content:
             application/json:
@@ -581,7 +586,7 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 error: RETENTION_NOT_DUE
-                errorDescription: The warranty period ends on 2026-12-10.
+                errorDescription: The retention period ends on 2026-12-10.
                 details:
                   releaseAt: "2026-12-10"
 
@@ -592,12 +597,12 @@ paths:
     post:
       tags: [Retention]
       operationId: refundRetention
-      summary: Refund the warranty retention to the owner
+      summary: Refund the snagging retention to the owner
       description: |
         Refunds the retention amount from the held capture back to the owner (PayPal
         `POST /v2/payments/captures/{id}/refund`), for example when a defect appears during
-        the warranty period. Resulting status: `CLOSED` with `retention.status: refunded`.
-        Allowed from `RELEASED`, at any time during the warranty period.
+        the retention period. Resulting status: `CLOSED` with `retention.status: refunded`.
+        Allowed from `RELEASED`, at any time during the retention period.
       x-roles: [owner]
       requestBody:
         required: true
@@ -833,7 +838,7 @@ paths:
       summary: Move the project clock forward
       description: |
         **Demo only (404 unless `DEMO_MODE=true`).** Moves this project's clock forward by
-        `days` (cumulative), so warranty periods and schedules can be shown without
+        `days` (cumulative), so retention periods and schedules can be shown without
         waiting. Affects `today`, retention due dates and proof date windows of this
         project only; PayPal authorization expiry is real time and is not affected.
       x-demo-only: true
@@ -1194,22 +1199,41 @@ components:
         RateLimit-Policy:
           $ref: "#/components/headers/RateLimitPolicy"
       content:
-        text/html:
+        application/json:
           schema:
-            type: string
-          example: Too many requests, please try again later.
+            $ref: "#/components/schemas/Error"
+          example:
+            error: TOO_MANY_REQUESTS
+            errorDescription: Too many requests. Please wait a moment and try again.
     PayPalError:
       description: |
-        An error returned by the PayPal REST API during this operation, forwarded unchanged
-        with PayPal's own HTTP status (typically `400`, `401`, `403`, `404`, `422`). Use
-        `debug_id` with PayPal support. Unexpected server failures return `500` with
+        `PAYPAL_ERROR`: the PayPal REST API refused this operation. The status is PayPal's
+        own (typically `400`, `404`, `422`), or `502` when PayPal is down or refuses the
+        platform's credentials. `details.debugId` is PayPal's `debug_id`, for PayPal
+        support. Unexpected server failures return `500` with
         `error: "Internal Server Error"`.
       content:
         application/json:
           schema:
-            oneOf:
-              - $ref: "#/components/schemas/PayPalError"
-              - $ref: "#/components/schemas/Error"
+            $ref: "#/components/schemas/PayPalError"
+          examples:
+            unprocessable:
+              summary: "422: PayPal refused the capture"
+              value:
+                error: PAYPAL_ERROR
+                errorDescription: Authorization has already been captured.
+                details:
+                  name: UNPROCESSABLE_ENTITY
+                  debugId: f1d2c3b4a5e6
+                  issue: AUTHORIZATION_ALREADY_CAPTURED
+            badGateway:
+              summary: "502: PayPal is unavailable"
+              value:
+                error: PAYPAL_ERROR
+                errorDescription: An internal server error has occurred.
+                details:
+                  name: INTERNAL_SERVER_ERROR
+                  debugId: f1d2c3b4a5e6
 
   schemas:
     Error:
@@ -1224,8 +1248,11 @@ components:
             `INVALID_MILESTONE_STATE`, `MILESTONE_BUSY`, `DISPUTE_OPEN`, `NOT_FUNDED`,
             `ORDER_MISMATCH`, `PAYMENT_DECLINED`, `PROOF_MISSING`, `NO_RETENTION_HELD`,
             `RETENTION_NOT_DUE`, `PAYOUT_NOT_FAILED`, `NO_OPEN_DISPUTE`,
-            `WEBHOOK_NOT_VERIFIED`, `TEST_CARD_MISSING`, `DEMO_ONLY`. Validation:
-            `Bad Request`. Upload limits: `LIMIT_FILE_SIZE`, `LIMIT_UNEXPECTED_FILE`,
+            `WEBHOOK_NOT_VERIFIED`, `TEST_CARD_MISSING`, `DEMO_ONLY`,
+            `REAUTHORIZE_NOT_SUPPORTED`, `REAUTHORIZE_ALREADY_USED`,
+            `REAUTHORIZATION_TOO_SOON`, `AUTHORIZATION_EXPIRED`, `RETENTION_ALREADY_PAID`,
+            `EVIDENCE_ALREADY_SUBMITTED`. PayPal: `PAYPAL_ERROR`. Limits:
+            `PAYLOAD_TOO_LARGE`, `TOO_MANY_REQUESTS`. Validation: `Bad Request`. Upload limits: `LIMIT_FILE_SIZE`, `LIMIT_UNEXPECTED_FILE`,
             `LIMIT_FILE_COUNT`, `LIMIT_FIELD_COUNT`. Fallbacks: `Not Found`,
             `Internal Server Error`.
           example: INVALID_MILESTONE_STATE
@@ -1239,33 +1266,27 @@ components:
 
     PayPalError:
       type: object
-      description: PayPal REST API error body, forwarded as received.
+      description: A PayPal REST API error, in RealPay's error shape.
+      required: [error, errorDescription, details]
       properties:
-        name:
+        error:
           type: string
-          example: UNPROCESSABLE_ENTITY
-        message:
+          enum: [PAYPAL_ERROR]
+        errorDescription:
           type: string
-        debug_id:
-          type: string
+          description: PayPal's description of the first issue, or its message.
         details:
-          type: array
-          items:
-            type: object
-            properties:
-              issue:
-                type: string
-              description:
-                type: string
-              field:
-                type: string
-              location:
-                type: string
-        links:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
+          type: object
+          properties:
+            name:
+              type: string
+              example: UNPROCESSABLE_ENTITY
+            debugId:
+              type: string
+              description: PayPal's `debug_id`, to quote to PayPal support.
+            issue:
+              type: string
+              example: AUTHORIZATION_ALREADY_CAPTURED
       additionalProperties: true
 
     CreateProjectRequest:

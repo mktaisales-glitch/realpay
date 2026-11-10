@@ -180,5 +180,11 @@ export async function runPrechecks(
     }
   }
 
+  // A certificate or invoice is easy to forge and carries no camera
+  // metadata to cross-check, so the AI may read it but never pays on it.
+  if (input.proofType === "document") {
+    softFlags.push("document_needs_human_check");
+  }
+
   return { mimeType, sha256, exif, hardFlags, softFlags };
 }

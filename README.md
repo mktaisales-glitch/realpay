@@ -9,6 +9,9 @@ proof against the milestone's checklist, and only then does PayPal capture
 and pay out. Anything the AI is unsure about goes to a person, never
 straight to the contractor.
 
+[![Payments via PayPal (sandbox)](https://img.shields.io/badge/payments-PayPal%20sandbox-003087)](https://developer.paypal.com/tools/sandbox/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 > Built for the PayPal AI Hackathon. RealPay is an independent project and
 > is not affiliated with, endorsed by or sponsored by PayPal. It runs
 > against the **PayPal sandbox only**: the server refuses to start with
@@ -34,7 +37,7 @@ two parts.
  Homeowner                     PayPal (authorization)            Payees
  ─────────                     ──────────────────────            ──────
  Funds milestone  ──────────▶  upfront + held authorized
- (PayPal, Pay Later or card)        │
+ (PayPal wallet or card)            │
                                     ├── upfront captured now ──▶ Supplier
                                     │   (materials, so work can start)
                                     │
@@ -49,15 +52,18 @@ two parts.
                          30 days ───┴── retention ─────────────▶ Contractor
                          (or refunded to the homeowner on a problem)
 
- Cancel before release  ─────▶  authorization voided, nothing is charged
+ Cancel before release  ─────▶  held part voided, never charged
+                                (the upfront already paid stays with the supplier)
 ```
 
 - **Upfront part** goes straight to the supplier, so the contractor never
   holds the homeowner's materials money.
-- **Held part** stays authorized until the work is proven. If the
-  authorization is close to expiring, the homeowner can reauthorize.
-- **Retention** (5% for 30 days in the renovation template) works like a
-  warranty and is paid out or refunded at the end of that period.
+- **Held part** stays authorized ("authorised · not yet charged") until
+  the work is proven. A PayPal authorization lasts 29 days. If it was paid
+  with a PayPal wallet, the homeowner can renew it once, from day 4.
+- **Retention** (5% for 30 days in the renovation template) is a snagging
+  retention: it is paid out at the end of that period, or refunded if a
+  problem is reported.
 - **The schedule follows the money.** Releasing a milestone early or late
   moves the dates of every milestone after it.
 - **Idempotent by design.** Every PayPal call carries a deterministic
@@ -72,19 +78,25 @@ Proof goes through three layers, cheapest first.
    outright: wrong file type, a duplicate of an earlier proof (SHA-256),
    instructions hidden in the note, or GPS far from the site. Soft flags
    force human review: edited with software, taken outside the milestone
-   window, no capture date, no location.
+   window, no capture date, no location. A document (PDF certificate,
+   invoice) always carries a soft flag: the AI reads it, the homeowner
+   signs it off.
 2. **AI inspector.** A vision model scores the photo or document against
    the milestone checklist and returns a strict JSON verdict
    (`met`, `confidence`, per-item findings), validated with zod. Providers
-   are tried in order (Gemini, then OpenRouter) with a daily call cap. If
-   every provider is down, the proof goes to a person.
+   are tried in order (Gemini, then OpenRouter, both on free tiers). Two
+   caps protect the shared quota: a daily cap for the whole server
+   (`AI_DAILY_CAP`) and one per project (`AI_CALLS_PER_PROJECT_PER_DAY`,
+   10 by default). If a cap is reached or every provider is down, the proof
+   goes to a person.
 3. **Release policy.** A pure, fully tested function decides: release
    only when the checklist is met, confidence is at least the template's
    minimum (0.8), no flag was raised, no dispute is open, and the amount is
    under the auto-release cap. Everything else is `review` or `reject`.
 
 The AI never moves money on its own above the cap. Every decision, with
-its reason, is written to an append-only, hash-chained ledger that both
+its reason, is written to an append-only, tamper-evident (hash-chained)
+ledger that both
 parties can read and export as an evidence pack.
 
 ## One engine, many niches
@@ -106,13 +118,16 @@ Adding a niche means adding a file. The engine does not change.
 | Situation                          | What RealPay does                                  |
 | ---------------------------------- | -------------------------------------------------- |
 | Card declined while funding        | Clear 402 error, nothing authorized                |
-| Fake certificate or reused photo   | Rejected by prechecks before any AI call           |
+| Reused photo or wrong file type    | Rejected by prechecks before any AI call           |
+| Photo of the wrong room            | AI finds the checklist not met, proof rejected     |
+| Certificate or other document      | AI reads it, the homeowner always signs it off     |
 | Prompt injection in the proof note | Hard flag, rejected                                |
 | AI unsure or unavailable           | Sent to the homeowner for review                   |
 | Homeowner rejects the proof        | Contractor can submit new proof, funds stay held   |
 | Supplier payout fails              | Retry with the same batch id, no double payment    |
 | Authorization about to expire      | Homeowner reauthorizes the held part               |
-| Project cancelled mid-way          | Unreleased authorizations are voided               |
+| Project cancelled mid-way          | Unreleased holds are voided, never charged         |
+| One project floods the AI          | Per-project daily cap, then manual review          |
 | Dispute opened                     | Releases frozen, evidence pack submitted to PayPal |
 | Forged webhook                     | Rejected by `verify-webhook-signature`             |
 
@@ -136,7 +151,7 @@ docs/
   postman/                  Postman collection and environment
 ```
 
-The layout and conventions follow PayPal's public
+The layout, route naming and conventions follow PayPal's public
 [integration samples](https://github.com/paypal-examples): TypeScript ESM,
 Express 5, `@paypal/paypal-server-sdk`, zod for input, `dotenvx` for
 configuration, vitest and supertest for tests.
@@ -190,9 +205,23 @@ step and no TypeScript tooling.
 ### Webhooks
 
 Point a sandbox webhook at `https://<your-host>/paypal-api/webhooks`,
-subscribe to `PAYMENT.PAYOUTS-ITEM.*` and `CUSTOMER.DISPUTE.*`, and put its
-id in `PAYPAL_WEBHOOK_ID`. Events are verified with PayPal before they can
-change anything.
+subscribe to `PAYMENT.PAYOUTSBATCH.*`, `PAYMENT.PAYOUTS-ITEM.*` and
+`CUSTOMER.DISPUTE.*`, and put its id in `PAYPAL_WEBHOOK_ID`. Events are
+verified with PayPal before they can change anything.
+
+Behind a reverse proxy (Render, Fly, a load balancer), set `TRUST_PROXY=1`
+so rate limits see the real client address. Leave it at `0` otherwise: a
+client could fake its address with `X-Forwarded-For`.
+
+## Path to production
+
+The sandbox build uses the Payouts API as a stand-in to pay the supplier
+and the contractor from the platform's account. RealPay is not an escrow
+service: the money is either held by a PayPal authorization or already
+paid out. A production version would onboard each contractor and supplier
+as a seller with [PayPal Multiparty](https://developer.paypal.com/docs/multiparty/)
+and capture straight to them, with the platform fee taken at capture. The
+engine does not change: only the gateway's capture and payout calls do.
 
 ## Tests and checks
 

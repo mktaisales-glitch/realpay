@@ -5,6 +5,7 @@ import type { Config } from "../config.ts";
 import type { Db } from "../db/database.ts";
 import type { MilestoneService } from "../domain/milestoneService.ts";
 import { requireRole } from "../middleware/capabilityAuth.ts";
+import { jsonRateLimit } from "../middleware/rateLimit.ts";
 
 /* ######################################################################
  * PayPal endpoints, named and shaped like the PayPal integration samples:
@@ -106,7 +107,9 @@ export function createPayPalRouter({
     requireRole(db, "owner"),
     authorizeOrderRouteHandler,
   );
-  router.post("/webhooks", webhookRouteHandler);
+  // PayPal retries with backoff, far below this; the limit only stops a
+  // flood of forged events from turning into verify-signature calls.
+  router.post("/webhooks", jsonRateLimit(60 * 1000, 60), webhookRouteHandler);
 
   return router;
 }

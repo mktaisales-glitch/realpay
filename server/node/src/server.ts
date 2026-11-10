@@ -54,6 +54,7 @@ const service = createMilestoneService({
   contractorEmail: config.CONTRACTOR_EMAIL,
   uploadDir: config.UPLOAD_DIR,
   demoMode: config.DEMO_MODE,
+  aiCallsPerProjectPerDay: config.AI_CALLS_PER_PROJECT_PER_DAY,
 });
 
 const app = createApp({ config, db, service, templates });

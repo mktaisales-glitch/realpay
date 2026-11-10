@@ -87,6 +87,7 @@ export const FLAG_LABELS = {
   no_capture_date: "No capture date",
   taken_away_from_site: "Taken away from the site",
   no_location: "No location data",
+  document_needs_human_check: "Documents are signed off by the homeowner",
 };
 
 export const PAYOUT_LABELS = {

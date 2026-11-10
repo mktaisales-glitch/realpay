@@ -2,7 +2,7 @@ import request from "supertest";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { MAX_PROOF_BYTES } from "./verification/prechecks.ts";
-import { createTestApp, pdfProof } from "./testUtils.ts";
+import { createTestApp, pdfProof, sitePhoto } from "./testUtils.ts";
 
 /* HTTP contract of the RealPay API, driven in-process by supertest. */
 
@@ -178,6 +178,35 @@ describe("validation and errors", () => {
     expect(verifier.verify).not.toHaveBeenCalled();
   });
 
+  it("answers JSON 400 for a body that is not valid JSON", async () => {
+    const { app } = setUp();
+
+    const response = await request(app)
+      .post("/api/projects")
+      .set("Content-Type", "application/json")
+      .send('{"templateId": ');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: "Bad Request",
+      errorDescription: "The request body is not valid JSON.",
+    });
+  });
+
+  it("answers JSON 413 for a JSON body over 64 kB", async () => {
+    const { app } = setUp();
+
+    const response = await request(app)
+      .post("/api/projects")
+      .send({ ownerName: "x".repeat(70 * 1024) });
+
+    expect(response.status).toBe(413);
+    expect(response.body).toEqual({
+      error: "PAYLOAD_TOO_LARGE",
+      errorDescription: "The request body is too large.",
+    });
+  });
+
   it("asks for the file when a proof upload has none", async () => {
     const { app, ms, contractor } = setUp();
 
@@ -273,6 +302,17 @@ describe("demo controls", () => {
   });
 });
 
+describe("demo controls without a link", () => {
+  it("answer 404 before asking for a token when DEMO_MODE is off", async () => {
+    const { app, ms } = setUp({ demoMode: false });
+
+    const response = await request(app).post(`${ms}/demo/fund-with-test-card`);
+
+    expect(response.status).toBe(404);
+    expect(response.body.error).toBe("NOT_FOUND");
+  });
+});
+
 describe("end-to-end over HTTP", () => {
   it("funds through PayPal checkout, accepts the proof and releases the money", async () => {
     const { app, project, ms, owner, contractor, paypal } = setUp();
@@ -298,8 +338,8 @@ describe("end-to-end over HTTP", () => {
     const proof = await request(app)
       .post(`${ms}/proofs`)
       .set("Authorization", contractor)
-      .field("note", "Certificate attached")
-      .attach("file", pdfProof("certificate"), "certificate.pdf");
+      .field("note", "Strip-out finished")
+      .attach("file", sitePhoto("strip-out"), "strip-out.jpg");
     expect(proof.status).toBe(201);
     expect(proof.body).toMatchObject({
       decision: "release",

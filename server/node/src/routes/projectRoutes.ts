@@ -1,5 +1,9 @@
-import { Router, type Request, type Response } from "express";
-import { rateLimit } from "express-rate-limit";
+import {
+  Router,
+  type NextFunction,
+  type Request,
+  type Response,
+} from "express";
 import multer from "multer";
 import { z } from "zod";
 
@@ -13,6 +17,7 @@ import {
 } from "../domain/projectView.ts";
 import type { Template } from "../domain/templates.ts";
 import { requireRole } from "../middleware/capabilityAuth.ts";
+import { jsonRateLimit } from "../middleware/rateLimit.ts";
 import { MAX_PROOF_BYTES } from "../verification/prechecks.ts";
 
 /* ######################################################################
@@ -82,23 +87,19 @@ export function createProjectRouter({
     storage: multer.memoryStorage(),
     limits: { fileSize: MAX_PROOF_BYTES, files: 1, fields: 4 },
   });
-  const createProjectLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000,
-    limit: 30,
-    standardHeaders: "draft-8",
-    legacyHeaders: false,
-  });
-  const proofLimiter = rateLimit({
-    windowMs: 10 * 60 * 1000,
-    limit: 20,
-    standardHeaders: "draft-8",
-    legacyHeaders: false,
-  });
+  const createProjectLimiter = jsonRateLimit(60 * 60 * 1000, 30);
+  const proofLimiter = jsonRateLimit(10 * 60 * 1000, 20);
 
-  function requireDemo() {
+  /** Demo controls do not exist outside demo mode, whoever asks. */
+  function demoOnly(
+    _request: Request,
+    _response: Response,
+    next: NextFunction,
+  ) {
     if (!config.DEMO_MODE) {
       throw new DomainError(404, "NOT_FOUND", "Demo controls are disabled.");
     }
+    next();
   }
 
   function sendView(request: Request, response: Response, status = 200) {
@@ -148,7 +149,7 @@ export function createProjectRouter({
   async function rejectRouteHandler(request: Request, response: Response) {
     const { projectId, milestoneId } = milestoneParams(request);
     const { reason } = reasonSchema.parse(request.body);
-    service.rejectProof(projectId, milestoneId, reason);
+    await service.rejectProof(projectId, milestoneId, reason);
     sendView(request, response);
   }
 
@@ -247,7 +248,6 @@ export function createProjectRouter({
     request: Request,
     response: Response,
   ) {
-    requireDemo();
     const { projectId, milestoneId } = milestoneParams(request);
     const { scenario } = testCardSchema.parse(request.body ?? {});
     const [number, expiry] = (config.DEMO_TEST_CARD ?? "").split("|");
@@ -268,23 +268,23 @@ export function createProjectRouter({
   }
 
   function advanceClockRouteHandler(request: Request, response: Response) {
-    requireDemo();
     const { days } = advanceClockSchema.parse(request.body ?? {});
     service.advanceClock(request.realpay!.project.id, days);
     sendView(request, response);
   }
 
-  function openDisputeRouteHandler(request: Request, response: Response) {
-    requireDemo();
+  async function openDisputeRouteHandler(request: Request, response: Response) {
     const { projectId, milestoneId } = milestoneParams(request);
-    service.openDemoDispute(projectId, milestoneId);
+    await service.openDemoDispute(projectId, milestoneId);
     sendView(request, response);
   }
 
-  function resolveDisputeRouteHandler(request: Request, response: Response) {
-    requireDemo();
+  async function resolveDisputeRouteHandler(
+    request: Request,
+    response: Response,
+  ) {
     const { projectId, milestoneId } = milestoneParams(request);
-    service.resolveDemoDispute(projectId, milestoneId);
+    await service.resolveDemoDispute(projectId, milestoneId);
     sendView(request, response);
   }
 
@@ -317,13 +317,20 @@ export function createProjectRouter({
 
   router.post(
     `${ms}/demo/fund-with-test-card`,
+    demoOnly,
     owner,
     fundWithTestCardRouteHandler,
   );
-  router.post(`${ms}/demo/dispute`, owner, openDisputeRouteHandler);
-  router.post(`${ms}/demo/dispute/resolve`, anyone, resolveDisputeRouteHandler);
+  router.post(`${ms}/demo/dispute`, demoOnly, owner, openDisputeRouteHandler);
+  router.post(
+    `${ms}/demo/dispute/resolve`,
+    demoOnly,
+    owner,
+    resolveDisputeRouteHandler,
+  );
   router.post(
     "/projects/:projectId/demo/advance-clock",
+    demoOnly,
     owner,
     advanceClockRouteHandler,
   );

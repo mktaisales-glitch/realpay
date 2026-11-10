@@ -21,6 +21,27 @@ export type PolicyDecision =
   | { decision: "review"; reason: string }
   | { decision: "reject"; reason: string };
 
+/** Plain words for the flags, because the reason is shown to both parties. */
+const FLAG_TEXT: Record<string, string> = {
+  file_too_large: "the file is too large",
+  unsupported_file_type: "the file is not a JPEG, PNG or PDF",
+  photo_required: "this milestone needs a photo, not a PDF",
+  duplicate_proof: "this exact file was already submitted",
+  instructions_in_note: "the note tries to give the AI instructions",
+  taken_away_from_site: "the photo was taken away from the site",
+  edited_with_software: "the photo was edited with software",
+  taken_outside_milestone_window:
+    "the photo was taken outside the milestone dates",
+  no_capture_date: "the photo has no capture date",
+  no_location: "the photo has no location",
+  document_needs_human_check:
+    "a document can be forged, so the homeowner signs it off",
+};
+
+function describeFlags(flags: readonly string[]): string {
+  return flags.map((flag) => FLAG_TEXT[flag] ?? flag).join("; ");
+}
+
 export function decideRelease(input: PolicyInput): PolicyDecision {
   if (input.disputeOpen) {
     return {
@@ -32,7 +53,7 @@ export function decideRelease(input: PolicyInput): PolicyDecision {
   if (input.hardFlags.length > 0) {
     return {
       decision: "reject",
-      reason: `Automatic checks failed: ${input.hardFlags.join(", ")}.`,
+      reason: `Rejected before any AI call: ${describeFlags(input.hardFlags)}.`,
     };
   }
   if (!input.verdict) {
@@ -63,7 +84,7 @@ export function decideRelease(input: PolicyInput): PolicyDecision {
   if (input.softFlags.length > 0) {
     return {
       decision: "review",
-      reason: `The proof passed, but these checks need a human: ${input.softFlags.join(", ")}.`,
+      reason: `The AI found the checklist met, but a person must decide: ${describeFlags(input.softFlags)}.`,
     };
   }
   if (input.heldCents > input.autoReleaseMaxCents) {

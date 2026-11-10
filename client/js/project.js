@@ -34,6 +34,16 @@ const state = {
   busy: false,
 };
 
+/** Like withBusy, but also pauses the background refresh meanwhile. */
+async function whileBusy(button, task) {
+  state.busy = true;
+  try {
+    await withBusy(button, task);
+  } finally {
+    state.busy = false;
+  }
+}
+
 function token() {
   const role =
     state.tokens.active ?? (state.tokens.owner ? "owner" : "contractor");
@@ -228,7 +238,7 @@ function metaRow(milestone) {
       >`,
     );
   }
-  if (retention.status === "released")
+  if (retention.status === "paid")
     items.push(html`<span class="state-ok">✓ Retention paid</span>`);
   if (retention.status === "refunded")
     items.push(html`<span>↩ Retention refunded to you</span>`);
@@ -439,15 +449,19 @@ function disputeBlock(milestone) {
 }
 
 const ACTION_BUTTONS = {
-  approve: (m) =>
-    html`<button
+  approve: (m) => {
+    // Without a proof that passed, releasing is an override, not the default.
+    const latest = m.proofs.at(-1);
+    const override = !latest || latest.decision === "reject";
+    return html`<button
       type="button"
-      class="btn btn-ok"
+      class="btn ${override ? "btn-secondary" : "btn-ok"}"
       data-act="approve"
       data-milestone="${m.id}"
     >
-      Release ${m.held.display}
-    </button>`,
+      ${override ? "Release anyway" : `Release ${m.held.display}`}
+    </button>`;
+  },
   reject: (m) =>
     html`<button
       type="button"
@@ -791,6 +805,8 @@ function afterRender() {
         show(await fetchView());
       } catch (error) {
         reportError(error);
+        // The hold may exist even if our answer got lost: show the truth.
+        show(await fetchView().catch(() => state.view));
       }
     },
     onCancel() {
@@ -863,7 +879,7 @@ async function handleAction(button) {
     return;
   }
   if (act === "clock") {
-    await withBusy(button, async () => {
+    await whileBusy(button, async () => {
       show(
         await api(
           `/api/projects/${encodeURIComponent(projectId)}/demo/advance-clock`,
@@ -898,7 +914,7 @@ async function handleAction(button) {
 
   if (act === "test-card") {
     const decline = button.dataset.scenario === "decline";
-    await withBusy(button, async () => {
+    await whileBusy(button, async () => {
       try {
         await milestoneAction(milestoneId, "demo/fund-with-test-card", {
           scenario: button.dataset.scenario,
@@ -937,7 +953,7 @@ async function handleAction(button) {
       "submit-evidence": "dispute/evidence",
     }[act] ?? act;
 
-  await withBusy(button, async () => {
+  await whileBusy(button, async () => {
     await milestoneAction(milestoneId, path, body);
     toast(BODILESS[act] ?? "Done.", "ok");
   });

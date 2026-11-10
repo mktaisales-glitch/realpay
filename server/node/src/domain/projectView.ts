@@ -10,6 +10,7 @@ import {
 } from "../db/repository.ts";
 import { DomainError } from "./domainError.ts";
 import { formatEuro, toPayPalValue } from "./money.ts";
+import { checkReauthorize, reauthorizeHistory } from "./reauthorization.ts";
 import { daysBetween } from "./schedule.ts";
 
 /* ######################################################################
@@ -52,6 +53,8 @@ function actionsFor(
     demoMode: boolean;
     upfrontPending: boolean;
     failedPayout: boolean;
+    canReauthorize: boolean;
+    retentionPayoutOut: boolean;
   },
 ): MilestoneAction[] {
   const actions: MilestoneAction[] = [];
@@ -61,9 +64,14 @@ function actionsFor(
   if (role === "owner") {
     if (status === "PLANNED") actions.push("fund", "cancel");
     if ((status === "FUNDED" || status === "IN_REVIEW") && !disputed)
-      actions.push("approve", "cancel");
+      actions.push("approve");
+    // A proof in review is rejected first, then the milestone can be cancelled.
+    if (status === "FUNDED" && !disputed) actions.push("cancel");
     if (status === "IN_REVIEW" && !disputed) actions.push("reject");
-    if (status === "FUNDED" || status === "IN_REVIEW")
+    if (
+      (status === "FUNDED" || status === "IN_REVIEW") &&
+      context.canReauthorize
+    )
       actions.push("reauthorize");
     if (status === "RELEASED" && milestone.retentionStatus === "held") {
       if (
@@ -73,7 +81,8 @@ function actionsFor(
       ) {
         actions.push("releaseRetention");
       }
-      actions.push("refundRetention");
+      if (!disputed && !context.retentionPayoutOut)
+        actions.push("refundRetention");
     }
     if (
       context.demoMode &&
@@ -94,7 +103,7 @@ function actionsFor(
   if (disputed) {
     if (milestone.disputeStatus !== "UNDER_REVIEW")
       actions.push("submitEvidence");
-    if (context.demoMode) actions.push("resolveDispute");
+    if (context.demoMode && role === "owner") actions.push("resolveDispute");
   }
   if (context.upfrontPending) actions.push("retryUpfront");
   if (context.failedPayout) actions.push("retryPayout");
@@ -124,7 +133,12 @@ export function buildProjectView(
     const payouts = listPayouts(db, milestone.id);
     const proofs = listProofs(db, milestone.id);
     const total = milestone.upfrontCents + milestone.heldCents;
-    totals.totalCents += total;
+    // A cancelled milestone only counts for what was actually spent on it.
+    const spentOnCancelled = milestone.upfrontCaptureId
+      ? milestone.upfrontCents
+      : 0;
+    totals.totalCents +=
+      milestone.status === "CANCELLED" ? spentOnCancelled : total;
     totals.feesCents += milestone.paypalFeeCents;
     if (milestone.upfrontCaptureId)
       totals.upfrontPaidCents += milestone.upfrontCents;
@@ -230,7 +244,21 @@ export function buildProjectView(
         today: options.today,
         demoMode: options.demoMode,
         upfrontPending,
-        failedPayout: payouts.some((payout) => payout.status === "FAILED"),
+        failedPayout: payouts.some(
+          (payout) =>
+            payout.status === "FAILED" &&
+            (payout.kind !== "retention" ||
+              (milestone.status === "RELEASED" &&
+                milestone.retentionStatus === "held")),
+        ),
+        canReauthorize: checkReauthorize({
+          ...reauthorizeHistory(ledger, milestone.id),
+          authExpiresAt: milestone.authExpiresAt,
+          now: options.now,
+        }).allowed,
+        retentionPayoutOut: payouts.some(
+          (payout) => payout.kind === "retention" && payout.status !== "FAILED",
+        ),
       }),
     };
   });

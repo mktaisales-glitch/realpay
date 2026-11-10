@@ -9,9 +9,55 @@ import { DomainError } from "../domain/domainError.ts";
 /* ######################################################################
  * One error middleware for the whole app (Express 5 forwards rejected
  * promises here, so route handlers carry no try/catch).
- * PayPal errors are returned with PayPal's own status and body, so the
- * browser sees the same debug_id the PayPal dashboard shows.
+ * Every error leaves as { error, errorDescription, details? }. PayPal
+ * errors keep PayPal's debug_id, so a support ticket can quote it.
  * ###################################################################### */
+
+type PayPalErrorBody = {
+  name?: unknown;
+  message?: unknown;
+  debug_id?: unknown;
+  details?: { issue?: unknown; description?: unknown }[];
+};
+
+function text(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+function payPalError(statusCode: number, result: unknown) {
+  const body = (result ?? {}) as PayPalErrorBody;
+  const first = Array.isArray(body.details) ? body.details[0] : undefined;
+  return {
+    // A PayPal outage, or PayPal refusing our own credentials, is not the
+    // caller's fault: report it as a bad gateway, not as their 401 or 500.
+    status: statusCode >= 500 || statusCode === 401 ? 502 : statusCode,
+    body: {
+      error: "PAYPAL_ERROR",
+      errorDescription:
+        text(first?.description) ??
+        text(body.message) ??
+        "PayPal could not complete this request.",
+      details: {
+        name: text(body.name),
+        debugId: text(body.debug_id),
+        issue: text(first?.issue),
+      },
+    },
+  };
+}
+
+/** Errors thrown by express.json (body-parser) carry a type and status. */
+function isBodyParserError(
+  error: Error,
+): error is Error & { type: string; status: number } {
+  const candidate = error as Error & { type?: unknown; status?: unknown };
+  return (
+    typeof candidate.type === "string" &&
+    typeof candidate.status === "number" &&
+    candidate.status >= 400 &&
+    candidate.status < 500
+  );
+}
 
 export default function errorMiddleware(
   error: Error,
@@ -31,12 +77,23 @@ export default function errorMiddleware(
       ...(error.details ? { details: error.details } : {}),
     });
   } else if (error instanceof ApiError || error instanceof CustomApiError) {
-    const { result, statusCode } = error;
-    response.status(statusCode).json(result ?? { error: "PayPal API error" });
+    const { status, body } = payPalError(error.statusCode, error.result);
+    if (status === 502) {
+      console.error(`[${request.method} ${request.path}] PayPal`, body.details);
+    }
+    response.status(status).json(body);
   } else if (error instanceof MulterError) {
     response.status(error.code === "LIMIT_FILE_SIZE" ? 413 : 400).json({
       error: error.code,
       errorDescription: error.message,
+    });
+  } else if (isBodyParserError(error)) {
+    const tooLarge = error.type === "entity.too.large";
+    response.status(error.status).json({
+      error: tooLarge ? "PAYLOAD_TOO_LARGE" : "Bad Request",
+      errorDescription: tooLarge
+        ? "The request body is too large."
+        : "The request body is not valid JSON.",
     });
   } else {
     // Never leak internals: the full error goes to the log only.
