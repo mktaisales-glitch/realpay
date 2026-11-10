@@ -1,10 +1,9 @@
-import { formatCents, formatDay, html, raw } from "./format.js";
+import { formatCents, html, raw } from "./format.js";
 
 /* ######################################################################
- * Timeline: where the money is, at a glance. A bar splits the project
- * value into released, held by PayPal and not yet funded; a stepper shows
- * each milestone moving locked → held → checking proof → released, with
- * the current one highlighted. Each step links to its milestone card.
+ * Balance: where the money is, at a glance. One big figure (what PayPal
+ * holds right now), a bar that splits the plan into released, held and
+ * not yet funded, and one chip per milestone that jumps to its card.
  * ###################################################################### */
 
 const ICON = (paths) =>
@@ -12,7 +11,7 @@ const ICON = (paths) =>
     `<svg class="step-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`,
   );
 
-const ICONS = {
+export const ICONS = {
   planned: ICON(
     '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   ),
@@ -27,7 +26,7 @@ const ICONS = {
   cancelled: ICON('<path d="M6 6l12 12"/><path d="M18 6L6 18"/>'),
 };
 
-const DONE = new Set(["RELEASED", "CLOSED", "CANCELLED"]);
+export const DONE = new Set(["RELEASED", "CLOSED", "CANCELLED"]);
 
 /** "1234.50" → 123450 */
 function cents(value) {
@@ -38,7 +37,7 @@ function cents(value) {
  * Where a milestone stands, as the stepper shows it.
  * @returns {{ key: string, step: number, label: string, detail: string }}
  */
-function stage(milestone) {
+export function stage(milestone) {
   const held = milestone.held.display;
   const disputed = milestone.dispute && milestone.dispute.status !== "RESOLVED";
   switch (milestone.status) {
@@ -114,7 +113,7 @@ function stage(milestone) {
 }
 
 /** Released, held and not-yet-funded money, in cents. */
-function buckets(milestones) {
+export function buckets(milestones) {
   const sums = {
     released: 0,
     upfront: 0,
@@ -152,7 +151,7 @@ function buckets(milestones) {
  * labour to the contractor, materials paid up front, and the retention
  * kept back for snagging.
  */
-function releasedNote(view, sums) {
+export function releasedNote(view, sums) {
   const retention = cents(view.totals.retention.value);
   const labour = sums.released - sums.upfront - retention;
   const paidOut = sums.upfront - sums.upfrontStuck;
@@ -167,41 +166,36 @@ function releasedNote(view, sums) {
     .join(" · ");
 }
 
-function moneyBar(view) {
+/**
+ * The PayPal-style balance card at the top of the project.
+ * @param {any} view
+ * @param {{ next?: unknown, details?: unknown }} [slots]
+ */
+export function balanceHero(view, { next = "", details = "" } = {}) {
   const sums = buckets(view.milestones);
   const total = sums.released + sums.held + sums.notFunded;
   const percent = (part) => (total ? (part / total) * 100 : 0);
   const parts = [
-    {
-      key: "released",
-      label: "Released",
-      value: sums.released,
-      note: releasedNote(view, sums),
-    },
-    {
-      key: "held",
-      label: "Held by PayPal",
-      value: sums.held,
-      note: "authorized, not charged",
-    },
-    {
-      key: "unfunded",
-      label: "Not yet funded",
-      value: sums.notFunded,
-      note: "",
-    },
+    { key: "released", label: "Released", value: sums.released },
+    { key: "held", label: "Held by PayPal", value: sums.held },
+    { key: "unfunded", label: "Not yet funded", value: sums.notFunded },
   ];
   const summary = parts
     .map((part) => `${part.label} ${formatCents(part.value)}`)
     .join(", ");
-  return html`<div class="money">
-    <div class="money-head">
-      <h2 id="timeline-title">Where the money is</h2>
-      <span class="small muted"
-        >${formatCents(total)} in the plan · payments built on PayPal
-        (sandbox)</span
-      >
+  return html`<section class="card balance" aria-labelledby="timeline-title">
+    <div class="balance-top">
+      <span id="timeline-title" class="balance-label">Held in PayPal</span>
+      <span class="balance-tag">Built on PayPal · sandbox</span>
     </div>
+    <div class="balance-amount">${formatCents(sums.held)}</div>
+    <p class="balance-sub">
+      <span class="dot dot-released" aria-hidden="true"></span
+      >${formatCents(sums.released)} released
+      <span class="dot dot-unfunded" aria-hidden="true"></span
+      >${formatCents(sums.notFunded)} to fund
+      <span class="balance-of">of ${formatCents(total)}</span>
+    </p>
     <div
       class="money-bar"
       role="img"
@@ -216,80 +210,20 @@ function moneyBar(view) {
           : "",
       )}
     </div>
-    <ul class="money-legend">
-      ${parts.map(
-        (part) =>
-          html`<li class="leg-${part.key}">
-            <span class="leg-dot" aria-hidden="true"></span>
-            <span
-              ><strong>${formatCents(part.value)}</strong> ${part.label}
-              ${
-                part.note
-                  ? html`<span class="small muted">· ${part.note}</span>`
-                  : ""
-              }</span
-            >
-          </li>`,
-      )}
-    </ul>
-  </div>`;
-}
-
-const TRACK = ["Locked", "Held", "Proof", "Paid"];
-
-function stepItem(milestone, current) {
-  const { key, step, label, detail } = stage(milestone);
-  const { forecastStart, forecastEnd, slipDays } = milestone.schedule;
-  const isCurrent = milestone.id === current;
-  return html`<li
-    class="step step-${key} ${isCurrent ? "is-current" : ""} ${
-      DONE.has(milestone.status) ? "is-done" : ""
-    }"
-  >
-    <a href="#m-${milestone.id}" ${isCurrent ? raw('aria-current="step"') : ""}>
-      <span class="step-top">
-        <span class="step-badge">${ICONS[key]}</span>
-        <span class="step-num">Milestone ${milestone.seq}</span>
-        ${isCurrent ? html`<span class="step-now">Now</span>` : ""}
-      </span>
-      <span class="step-title">${milestone.title}</span>
-      <span class="step-amount">${milestone.amount.display}</span>
-      <span class="step-dates small muted"
-        >${formatDay(forecastStart)} –
-        ${formatDay(forecastEnd)}${
-          slipDays > 0
-            ? html` · <span class="step-late">${slipDays}d late</span>`
-            : ""
-        }</span
-      >
-      <span class="step-state">${label}</span>
-      <span class="step-detail small">${detail}</span>
-      <span class="step-track" aria-hidden="true">
-        ${TRACK.map(
-          (name, index) =>
-            html`<span
-              class="${index <= step ? "on" : ""}"
-              title="${name}"
-            ></span>`,
-        )}
-      </span>
-    </a>
-  </li>`;
-}
-
-/** @param {any} view */
-export function timelineCard(view) {
-  const current = view.milestones.find(
-    (milestone) => !DONE.has(milestone.status),
-  )?.id;
-  return html`<section class="card timeline" aria-labelledby="timeline-title">
-    ${moneyBar(view)}
-    <ol class="stepper" aria-label="Milestones in order">
-      ${view.milestones.map((milestone) => stepItem(milestone, current))}
+    <ol class="chips" aria-label="Milestones">
+      ${view.milestones.map((milestone) => {
+        const { key, label } = stage(milestone);
+        return html`<li>
+          <a
+            class="chip chip-${key}"
+            href="#m-${milestone.id}"
+            title="${`${milestone.seq}. ${milestone.title}: ${label}`}"
+            aria-label="${`Milestone ${milestone.seq}, ${milestone.title}: ${label}`}"
+            >${ICONS[key]}<span>${milestone.seq}</span></a
+          >
+        </li>`;
+      })}
     </ol>
-    <p class="step-key small muted" aria-hidden="true">
-      ${ICONS.planned} not funded ${ICONS.held} held by PayPal ${ICONS.checking}
-      checking proof ${ICONS.released} released
-    </p>
+    ${next} ${details}
   </section>`;
 }

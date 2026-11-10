@@ -1,4 +1,4 @@
-import { formatDateTime, html } from "./format.js";
+import { formatDateTime, html, raw } from "./format.js";
 
 /* ######################################################################
  * Changes & extras. Work that was not in the plan can only be paid once
@@ -137,7 +137,7 @@ function proposeForm(view) {
         minlength="3"
         maxlength="280"
         rows="2"
-        placeholder="Move the shower valve 30 cm to the left and re-tile around it"
+        placeholder="Add a shelf above the washing machine"
       ></textarea>
     </label>
     <div class="extras-fields">
@@ -173,8 +173,8 @@ function proposeForm(view) {
   </form>`;
 }
 
-/** @param {any} view */
-export function changeOrdersCard(view) {
+/** @param {any} view @param {boolean} [open] */
+export function changeOrdersCard(view, open = false) {
   const changeOrders = view.changeOrders ?? [];
   const agreed = changeOrders.filter(
     (changeOrder) => changeOrder.status === "accepted",
@@ -194,35 +194,31 @@ export function changeOrdersCard(view) {
           }).format(agreedCents / 100)}</span
         >`
       : "";
-  return html`<section class="card extras" aria-labelledby="extras-title">
-    <div class="extras-head">
+  return html`<details
+    class="card fold extras"
+    id="extras"
+    data-key="extras"
+    ${open ? raw("open") : ""}
+  >
+    <summary class="fold-head">
       <h2 id="extras-title">Changes &amp; extras</h2>
       ${summary}
+      <span class="chev" aria-hidden="true"></span>
+    </summary>
+    <div class="fold-body">
+      <p class="extras-lead">
+        Something not in the plan? Extras are paid only once both of you agree.
+      </p>
+      ${
+        changeOrders.length > 0
+          ? html`<ol class="extras-list" aria-label="Recorded extras">
+              ${changeOrders
+                .toReversed()
+                .map((changeOrder) => changeOrderItem(changeOrder, view))}
+            </ol>`
+          : ""
+      }
+      ${proposeForm(view)}
     </div>
-    <p class="extras-lead">
-      Asked for something that wasn't in the plan? Record it here. Nothing
-      outside the plan can be paid, and nothing agreed here can be denied later
-      — it protects both of you.
-    </p>
-    <ul class="extras-rules">
-      <li class="rule-ok">
-        Agreed by both sides → added to the plan, payable like any milestone
-      </li>
-      <li class="rule-bad">
-        Not in the plan or not agreed here → RealPay can't pay for it
-      </li>
-    </ul>
-    ${
-      changeOrders.length > 0
-        ? html`<ol class="extras-list" aria-label="Recorded extras">
-            ${changeOrders
-              .toReversed()
-              .map((changeOrder) => changeOrderItem(changeOrder, view))}
-          </ol>`
-        : html`<p class="small muted extras-empty">
-            No extras recorded yet. The plan is exactly the milestones above.
-          </p>`
-    }
-    ${proposeForm(view)}
-  </section>`;
+  </details>`;
 }

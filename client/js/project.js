@@ -10,6 +10,7 @@ import {
   formatDateTime,
   formatDay,
   html,
+  raw,
   render,
   shortHash,
 } from "./format.js";
@@ -18,7 +19,14 @@ import {
   eurosToCents,
   MAX_EXTRA_EUR,
 } from "./changeOrders.js";
-import { timelineCard } from "./timeline.js";
+import {
+  balanceHero,
+  buckets,
+  DONE,
+  ICONS,
+  releasedNote,
+  stage,
+} from "./timeline.js";
 import { ganttSvg } from "./gantt.js";
 import { preparePayPal, wirePayPalButtons } from "./paypalCheckout.js";
 import { ask, toast, withBusy } from "./ui.js";
@@ -38,7 +46,27 @@ const state = {
   view: null,
   lastJson: "",
   busy: false,
+  /** Folds the viewer opened or closed, kept across re-renders. */
+  open: new Set(),
+  closed: new Set(),
+  /** The milestone the next step is about; it starts open. */
+  focus: "",
 };
+
+/** Whether a fold is open: the viewer's choice first, then the default. */
+function isOpen(key, byDefault = false) {
+  return state.open.has(key) || (byDefault && !state.closed.has(key));
+}
+
+function openAttr(key, byDefault = false) {
+  return isOpen(key, byDefault) ? raw("open") : "";
+}
+
+function remember(key, open) {
+  if (!key) return;
+  (open ? state.open : state.closed).add(key);
+  (open ? state.closed : state.open).delete(key);
+}
 
 /** Like withBusy, but also pauses the background refresh meanwhile. */
 async function whileBusy(button, task) {
@@ -134,7 +162,7 @@ function totals(view) {
       <dt>${label}</dt>
       <dd>${value.display}</dd>
     </div>`;
-  return html`<dl class="card totals">
+  return html`<dl class="totals">
     ${cell("", "Project value", t.total)}
     ${cell("", "Paid to suppliers", t.upfrontPaid)}
     ${cell("held", "Authorized, not charged", t.held)}
@@ -156,7 +184,7 @@ function totals(view) {
 }
 
 function schedule(view) {
-  return html`<div class="card gantt">
+  return html`<div class="gantt">
     ${ganttSvg(view.milestones, view.today)}
     <div class="legend">
       <span><i style="border:1.5px dashed var(--ink-3)"></i>Planned</span>
@@ -350,21 +378,28 @@ function fundPanel(milestone, view) {
   </div>`;
 }
 
+function checklist(milestone) {
+  return html`<ul class="checklist">
+    ${milestone.checklist.map((item) => html`<li>${item}</li>`)}
+  </ul>`;
+}
+
 function uploadPanel(milestone) {
   const accept =
     milestone.proofType === "document"
       ? "image/jpeg,image/png,application/pdf"
       : "image/jpeg,image/png";
   return html`<form class="panel upload" data-upload="${milestone.id}">
-    <h4>Prove this milestone is done</h4>
+    <h4>${milestone.proofs.length > 0 ? "Upload a new proof" : "Prove this milestone is done"}</h4>
     <p class="small muted" style="margin:0">
       ${
         milestone.proofType === "document"
           ? "Upload the signed document (PDF, JPG or PNG)."
           : "Upload an original photo taken on site (JPG or PNG). Edited or reused photos are flagged."
       }
-      The AI checks it against the list above.
+      The AI checks it against this list:
     </p>
+    ${checklist(milestone)}
     <label class="dropzone">
       <strong>Choose a file</strong>
       <span class="small" data-file-name>or drop it here · max 8 MB</span>
@@ -382,7 +417,8 @@ function uploadPanel(milestone) {
 }
 
 function verifyingPanel() {
-  return html`<div class="verifying" aria-live="polite">
+  return html`<div class="verifying ai-card" aria-live="polite">
+    <span class="ai-tag">AI inspector</span>
     <div>
       <span class="spinner" aria-hidden="true"></span>AI is verifying the proof…
     </div>
@@ -429,7 +465,8 @@ function proofBlock(proof, proofType) {
       (flag) => html`<span class="flag">${FLAG_LABELS[flag] ?? flag}</span>`,
     ),
   ];
-  return html`<div class="proof proof-${proof.decision}">
+  return html`<div class="proof ai-card proof-${proof.decision}">
+    <span class="ai-tag">AI inspector</span>
     <div class="proof-head">
       <span>${DECISION_LABELS[proof.decision] ?? proof.decision}</span>
       <span class="small muted"
@@ -626,56 +663,153 @@ function milestoneCard(milestone, view) {
   const buttons = Object.entries(ACTION_BUTTONS)
     .filter(([action]) => actions.has(action))
     .map(([, button]) => button(milestone));
-  const proofs = milestone.proofs.toReversed();
+  const [latest, ...older] = milestone.proofs.toReversed();
   const waitingForProof =
     view.role === "owner" &&
     milestone.status === "FUNDED" &&
     milestone.proofs.length === 0;
+  const uploading = actions.has("submitProof");
+  const where = stage(milestone);
+  const key = `m-${milestone.id}`;
 
-  return html`<article class="card milestone" id="m-${milestone.id}">
-    <div class="milestone-head">
-      <div>
+  return html`<details
+    class="card milestone ms-${where.key}"
+    id="${key}"
+    data-key="${key}"
+    ${openAttr(key, milestone.id === state.focus)}
+  >
+    <summary class="milestone-head">
+      <span class="ms-icon">${ICONS[where.key]}</span>
+      <span class="ms-title">
         <h3><span class="seq">${milestone.seq}</span>${milestone.title}</h3>
+        <span class="ms-sub">${where.detail}</span>
+      </span>
+      <span class="ms-right">
+        <span class="milestone-amount">${milestone.amount.display}</span>
         <span class="pill pill-${milestone.status.toLowerCase()}"
           >${STATUS_LABELS[milestone.status] ?? milestone.status}</span
         >
-      </div>
-      <div class="milestone-amount">${milestone.amount.display}</div>
+      </span>
+      <span class="chev" aria-hidden="true"></span>
+    </summary>
+    <div class="ms-body">
+      ${actions.has("fund") ? fundPanel(milestone, view) : ""}
+      ${latest ? proofBlock(latest, milestone.proofType) : ""}
+      ${uploading ? uploadPanel(milestone) : ""}
+      ${waitingForProof ? html`<p class="small muted" style="margin:0">Waiting for ${view.contractorName} to upload proof. Nothing is released until it passes.</p>` : ""}
+      ${
+        older.length > 0
+          ? html`<details
+              class="fold-inline"
+              data-key="${key}-older"
+              ${openAttr(`${key}-older`)}
+            >
+              <summary>Earlier proofs (${older.length})</summary>
+              <div class="fold-stack">
+                ${older.map((proof) => proofBlock(proof, milestone.proofType))}
+              </div>
+            </details>`
+          : ""
+      }
+      ${disputeBlock(milestone)} ${payoutsBlock(milestone)}
+      ${
+        buttons.length > 0 || milestone.proofs.length > 0
+          ? html`<div class="btn-row">
+              ${buttons}
+              ${
+                milestone.proofs.length > 0
+                  ? html`<button
+                      type="button"
+                      class="btn-link"
+                      data-act="evidence-pack"
+                      data-milestone="${milestone.id}"
+                    >
+                      Download evidence pack
+                    </button>`
+                  : ""
+              }
+            </div>`
+          : ""
+      }
+      <details
+        class="fold-inline"
+        data-key="${key}-info"
+        ${openAttr(`${key}-info`)}
+      >
+        <summary>Payment split, dates${uploading ? "" : " and checklist"}</summary>
+        <div class="fold-stack">
+          ${splitBlock(milestone)} ${metaRow(milestone)}
+          ${uploading ? "" : checklist(milestone)}
+        </div>
+      </details>
     </div>
-    ${splitBlock(milestone)} ${metaRow(milestone)}
-    <div>
-      <div class="small muted" style="margin-bottom:4px">
-        What the proof must show
-      </div>
-      <ul class="checklist">
-        ${milestone.checklist.map((item) => html`<li>${item}</li>`)}
-      </ul>
-    </div>
-    ${actions.has("fund") ? fundPanel(milestone, view) : ""}
-    ${actions.has("submitProof") ? uploadPanel(milestone) : ""}
-    ${waitingForProof ? html`<p class="small muted" style="margin:0">Waiting for ${view.contractorName} to upload proof. Nothing is released until it passes.</p>` : ""}
-    ${proofs.map((proof) => proofBlock(proof, milestone.proofType))}
-    ${disputeBlock(milestone)} ${payoutsBlock(milestone)}
-    ${
-      buttons.length > 0 || milestone.proofs.length > 0
-        ? html`<div class="btn-row">
-            ${buttons}
-            ${
-              milestone.proofs.length > 0
-                ? html`<button
-                    type="button"
-                    class="btn-link"
-                    data-act="evidence-pack"
-                    data-milestone="${milestone.id}"
-                  >
-                    Download evidence pack
-                  </button>`
-                : ""
-            }
-          </div>`
-        : ""
-    }
-  </article>`;
+  </details>`;
+}
+
+/* ---------- view: next step ---------- */
+
+/** The one thing to do now, for whoever is looking. */
+function nextStep(view) {
+  const pending = (view.changeOrders ?? []).find((item) => item.canDecide);
+  if (pending)
+    return {
+      text: `Answer extra #${pending.seq} · ${pending.price.display}`,
+      href: "#extras",
+    };
+  const rules = [
+    [
+      (m, a) => a.has("retryUpfront") || a.has("retryPayout"),
+      (m) => `Retry a failed payout on milestone ${m.seq}`,
+    ],
+    [
+      (m, a) => a.has("approve") && m.proofs.at(-1)?.decision !== "reject" && m.proofs.length > 0,
+      (m) => `Review the proof for milestone ${m.seq}`,
+    ],
+    [(m, a) => a.has("submitProof"), (m) => `Upload proof for milestone ${m.seq}`],
+    [
+      (m, a) => a.has("fund"),
+      (m) => `Fund milestone ${m.seq} · ${m.amount.display}`,
+    ],
+    [
+      (m, a) => a.has("releaseRetention"),
+      (m) => `Pay the ${m.retention.display} retention on milestone ${m.seq}`,
+    ],
+  ];
+  for (const [matches, text] of rules) {
+    const milestone = view.milestones.find((m) =>
+      matches(m, new Set(m.actions)),
+    );
+    if (milestone)
+      return { text: text(milestone), href: `#m-${milestone.id}`, milestone };
+  }
+  const current = view.milestones.find((m) => !DONE.has(m.status));
+  if (!current) return { text: "All milestones paid.", waiting: true };
+  const owner = view.role === "owner";
+  const waitingFor = {
+    PLANNED: owner ? "" : `${view.ownerName} to fund it`,
+    FUNDED: owner ? `${view.contractorName} to upload proof` : "",
+    IN_REVIEW: owner ? "" : `${view.ownerName} to review the proof`,
+  }[current.status];
+  return {
+    text: waitingFor
+      ? `Waiting for ${waitingFor} · milestone ${current.seq}`
+      : `Milestone ${current.seq}: ${stage(current).label}`,
+    href: `#m-${current.id}`,
+    milestone: current,
+    waiting: true,
+  };
+}
+
+function nextLink(step) {
+  const inner = html`<span class="next-label"
+      >${step.waiting ? "Now" : "Next"}</span
+    >
+    <span class="next-text">${step.text}</span>`;
+  return step.href
+    ? html`<a class="next${step.waiting ? " next-wait" : ""}" href="${step.href}"
+        >${inner}<span class="chev-r" aria-hidden="true">›</span></a
+      >`
+    : html`<p class="next next-wait">${inner}</p>`;
 }
 
 /* ---------- view: share, demo, ledger ---------- */
@@ -698,8 +832,8 @@ function shareCard(view) {
     </div>`;
   return html`<div class="card share">
     <div class="small muted">
-      Each link is a private key to this project. Send the contractor link only
-      to ${view.contractorName}.
+      Each link is a private key. Send the contractor link only to
+      ${view.contractorName === "Contractor" ? "the contractor" : view.contractorName}.
     </div>
     ${row("Contractor", base + state.tokens.contractor)}
     ${row("Homeowner", base + state.tokens.owner)}
@@ -709,7 +843,7 @@ function shareCard(view) {
 function demoCard(view) {
   if (!view.demoMode || view.role !== "owner") return "";
   return html`<div class="card demo">
-    <h2>Sandbox demo controls</h2>
+    <h3>Sandbox clock</h3>
     <p class="small muted" style="margin:0">
       PayPal sandbox only: no real money moves. Move the project clock to see
       retention and expiring holds without waiting.
@@ -775,9 +909,13 @@ function ledgerCard(view) {
       `${milestone.seq}. ${milestone.title}`,
     ]),
   );
-  return html`<section class="card ledger" aria-labelledby="ledger-title">
-    <div class="ledger-head">
-      <h2 id="ledger-title" style="font-size:16px">Audit trail</h2>
+  return html`<details
+    class="card fold ledger-fold"
+    data-key="ledger"
+    ${openAttr("ledger")}
+  >
+    <summary class="fold-head">
+      <h2 id="ledger-title">Audit trail</h2>
       ${
         integrity.valid
           ? html`<span
@@ -788,52 +926,81 @@ function ledgerCard(view) {
             >`
           : html`<span class="pill pill-cancelled">Tampering detected</span>`
       }
-    </div>
-    <ol>
-      ${entries.map(
-        (entry) =>
-          html`<li>
-            <time datetime="${entry.createdAt}"
-              >${formatDateTime(entry.createdAt)}</time
-            >
-            <div class="what">
-              <strong>${LEDGER_LABELS[entry.action] ?? entry.action}</strong>
-              <span class="small muted"
-                >${ledgerDetail(entry, titles)}${entry.paypalRef ? html` · <span class="mono">${entry.paypalRef}</span>` : ""}</span
+      <span class="chev" aria-hidden="true"></span>
+    </summary>
+    <section class="ledger" aria-labelledby="ledger-title">
+      <ol>
+        ${entries.map(
+          (entry) =>
+            html`<li>
+              <time datetime="${entry.createdAt}"
+                >${formatDateTime(entry.createdAt)}</time
               >
-            </div>
-            <span class="amount">${ledgerAmount(entry)}</span>
-          </li>`,
-      )}
-    </ol>
-  </section>`;
+              <div class="what">
+                <strong>${LEDGER_LABELS[entry.action] ?? entry.action}</strong>
+                <span class="small muted"
+                  >${ledgerDetail(entry, titles)}${entry.paypalRef ? html` · <span class="mono">${entry.paypalRef}</span>` : ""}</span
+                >
+              </div>
+              <span class="amount">${ledgerAmount(entry)}</span>
+            </li>`,
+        )}
+      </ol>
+    </section>
+  </details>`;
 }
+
+const DOTS = raw(
+  '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
+);
 
 function page(view) {
   const people = html`${view.ownerName} pays · ${view.contractorName} delivers`;
+  const step = nextStep(view);
+  state.focus = step.milestone?.id ?? "";
+  const share = shareCard(view);
+  const demo = demoCard(view);
+  const menu =
+    share || demo
+      ? html`<details class="menu" data-key="menu" ${openAttr("menu")}>
+          <summary aria-label="Share and demo">
+            ${DOTS}<span>Share &amp; demo</span>
+          </summary>
+          <div class="menu-panel">${share}${demo}</div>
+        </details>`
+      : "";
+  const released = releasedNote(view, buckets(view.milestones));
+  const details = html`<details
+    class="fold-inline balance-more"
+    data-key="totals"
+    ${openAttr("totals")}
+  >
+    <summary>Totals and release rules</summary>
+    ${released ? html`<p class="small balance-note">Released: ${released}</p>` : ""}
+    ${totals(view)}
+  </details>`;
+  const answerNeeded = (view.changeOrders ?? []).some((item) => item.canDecide);
   return html`
-    <div class="project-head">
-      <div>
+    <header class="p-head">
+      <div class="p-title">
         <div class="small muted">${people}</div>
         <h1>${view.title}</h1>
       </div>
-      ${roleSwitch(view)}
-    </div>
-    ${timelineCard(view)} ${totals(view)} ${shareCard(view)}
-    <h2 class="section-title">Schedule</h2>
-    ${schedule(view)}
+      <div class="p-tools">${roleSwitch(view)} ${menu}</div>
+    </header>
+    ${balanceHero(view, { next: nextLink(step), details })}
     <h2 class="section-title">Milestones</h2>
     <div class="milestones">
       ${view.milestones.map((milestone) => milestoneCard(milestone, view))}
     </div>
-    ${changeOrdersCard(view)}
-    ${
-      demoCard(view)
-        ? html`<h2 class="section-title">Demo</h2>
-            ${demoCard(view)}`
-        : ""
-    }
-    <h2 class="section-title">Ledger</h2>
+    ${changeOrdersCard(view, isOpen("extras", answerNeeded))}
+    <details class="card fold" data-key="schedule" ${openAttr("schedule")}>
+      <summary class="fold-head">
+        <h2>Schedule</h2>
+        <span class="chev" aria-hidden="true"></span>
+      </summary>
+      ${schedule(view)}
+    </details>
     ${ledgerCard(view)}
   `;
 }
@@ -918,7 +1085,7 @@ const CONFIRMATIONS = {
     confirmLabel: "Send back",
     reason: {
       label: "What is missing?",
-      placeholder: "The tiles around the shower are not finished yet.",
+      placeholder: "The pipe is still loose.",
     },
   }),
   "refund-retention": (m) => ({
@@ -992,6 +1159,7 @@ async function handleAction(button) {
     return;
   }
   if (!milestone) return;
+  remember(`m-${milestone.id}`, true);
 
   if (act === "test-card") {
     const decline = button.dataset.scenario === "decline";
@@ -1122,6 +1290,7 @@ async function decideChangeOrder(button, accept) {
 /** @param {HTMLFormElement} form */
 async function handleUpload(form) {
   const milestoneId = form.dataset.upload;
+  remember(`m-${milestoneId}`, true);
   const data = new FormData(form);
   const file = data.get("file");
   if (!(file instanceof File) || file.size === 0) {
@@ -1164,8 +1333,35 @@ async function handleUpload(form) {
   show(await fetchView());
 }
 
+// The menu closes on any click outside it, even outside the app container.
+document.addEventListener("click", (event) => {
+  const menu = app.querySelector("details.menu[open]");
+  if (menu && !menu.contains(/** @type {Node} */ (event.target))) {
+    menu.open = false;
+    remember("menu", false);
+  }
+});
+
 app.addEventListener("click", (event) => {
   const target = /** @type {HTMLElement} */ (event.target);
+  const summary = target.closest("summary");
+  const fold = summary?.parentElement;
+  if (fold instanceof HTMLDetailsElement && fold.dataset.key) {
+    remember(fold.dataset.key, !fold.open);
+    return;
+  }
+  const anchor = target.closest('a[href^="#"]');
+  if (anchor instanceof HTMLAnchorElement) {
+    const goal = anchor.hash.length > 1 && !anchor.hash.startsWith("#t=") ? document.querySelector(`#${CSS.escape(anchor.hash.slice(1))}`) : null;
+    if (goal instanceof HTMLDetailsElement) {
+      event.preventDefault();
+      goal.open = true;
+      remember(goal.dataset.key, true);
+      goal.scrollIntoView({ behavior: "smooth", block: "start" });
+      goal.querySelector("summary")?.focus({ preventScroll: true });
+      return;
+    }
+  }
   const roleButton = target.closest("[data-role]");
   if (roleButton instanceof HTMLButtonElement) {
     state.tokens.active = /** @type {"owner" | "contractor"} */ (

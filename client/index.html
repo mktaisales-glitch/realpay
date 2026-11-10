@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700;800&family=Michroma&family=Montserrat:wght@500;600;700&display=swap"
     />
     <link rel="stylesheet" href="/css/realpay.css" />
     <title>RealPay · Pay for the work, not the promise</title>
@@ -48,70 +48,30 @@
     <div class="container">
       <main>
         <section class="hero">
-          <div>
-            <h1>Pay for the work, <em>not the promise.</em></h1>
-            <p>
-              RealPay splits a job into milestones. Materials are paid up front,
-              the labour is only authorized with PayPal, and it is charged only
-              when AI has checked photo or document proof that the work is done.
-            </p>
-            <div class="btn-row">
-              <a class="btn btn-primary" href="#start">Start a project</a>
-              <a class="btn btn-secondary" href="#how">How it works</a>
-            </div>
-          </div>
-          <aside class="card story" aria-labelledby="story-title">
-            <p class="story-title" id="story-title">
-              The problem we're solving
-            </p>
-            <blockquote>
-              “I paid €3,000 up front for a renovation. The work never got
-              done.”
-            </blockquote>
-            <p class="small muted" style="margin: 0">
-              Paying everything up front puts all the risk on the homeowner.
-              Paying everything at the end puts it on the contractor. Banks
-              solved this for construction loans decades ago: release money in
-              stages, against proof. RealPay brings that to everyday jobs.
-            </p>
-          </aside>
+          <h1>Pay for the work, <em>not the promise.</em></h1>
+          <p>Milestone payments held by PayPal. Released when AI checks the proof.</p>
+          <a class="btn btn-primary" href="#start">Start a project</a>
         </section>
 
-        <h2 class="section-title" id="how">How it works</h2>
-        <section class="flow">
-          <div class="card">
-            <div class="step">1</div>
-            <h3>Agree the milestones</h3>
-            <p class="small muted">
-              Pick a template. Each stage has a price, dates and a checklist of
-              what the proof must show.
+        <details class="card fold how" id="how" data-key="how">
+          <summary class="fold-head">
+            <h2>How it works</h2>
+            <span class="small muted">4 steps</span>
+            <span class="chev" aria-hidden="true"></span>
+          </summary>
+          <div class="fold-body">
+            <ol class="how-steps">
+              <li><strong>Agree the milestones.</strong> Each has a price and a checklist of what the proof must show.</li>
+              <li><strong>Fund with PayPal.</strong> Materials go to the supplier now. The labour is only authorized and held.</li>
+              <li><strong>AI checks the proof.</strong> Photo or certificate against the checklist. Reused or edited files are flagged.</li>
+              <li><strong>Money moves on proof.</strong> Small, clear stages release on their own. The rest waits for your OK.</li>
+            </ol>
+            <p class="how-why small muted">
+              Why: paying everything up front puts all the risk on the homeowner, paying at the end puts it on the contractor.
+              Banks release construction loans in stages, against proof. RealPay brings that to everyday jobs.
             </p>
           </div>
-          <div class="card">
-            <div class="step">2</div>
-            <h3>Fund with PayPal</h3>
-            <p class="small muted">
-              The supplier's share is paid now. The labour is authorized and
-              held. Pay Later is offered when you're eligible.
-            </p>
-          </div>
-          <div class="card">
-            <div class="step">3</div>
-            <h3>AI checks the proof</h3>
-            <p class="small muted">
-              The contractor uploads a photo or certificate. AI compares it with
-              the checklist and flags reused or edited files.
-            </p>
-          </div>
-          <div class="card">
-            <div class="step">4</div>
-            <h3>Money moves on proof</h3>
-            <p class="small muted">
-              Small, clear stages release automatically. Everything else waits
-              for your OK. A 5% retention covers snagging.
-            </p>
-          </div>
-        </section>
+        </details>
 
         <h2 class="section-title" id="start">Start a project</h2>
         <section class="templates" id="templates" aria-live="polite">
