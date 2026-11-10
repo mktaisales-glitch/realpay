@@ -1,0 +1,228 @@
+import { formatDateTime, html } from "./format.js";
+
+/* ######################################################################
+ * Changes & extras. Work that was not in the plan can only be paid once
+ * both parties have agreed it here: an agreed extra with a price becomes
+ * a milestone, funded and proven like the rest. Every step is recorded in
+ * the audit trail, so neither side can deny it later.
+ * ###################################################################### */
+
+/** Mirrors MAX_CHANGE_ORDER_CENTS on the server: one extra is one milestone. */
+export const MAX_EXTRA_EUR = 2000;
+
+const AMOUNT_PATTERN = /^\d{1,7}(?:[.,]\d{1,2})?$/;
+
+/**
+ * "120", "120.5" or "120,50" in euros to whole cents; null if it isn't one.
+ * @param {string} text
+ */
+export function eurosToCents(text) {
+  const value = text.trim();
+  if (!AMOUNT_PATTERN.test(value)) return null;
+  return Math.round(Number(value.replace(",", ".")) * 100);
+}
+
+/** @param {any} view @param {"owner" | "contractor"} role */
+function party(view, role) {
+  return role === "owner" ? view.ownerName : view.contractorName;
+}
+
+/** @param {any} view @param {"owner" | "contractor"} role */
+function partyWithRole(view, role) {
+  const name = party(view, role);
+  const what = role === "owner" ? "homeowner" : "contractor";
+  return name.toLowerCase() === what ? name : `${name} (${what})`;
+}
+
+/** @param {"owner" | "contractor"} role */
+function other(role) {
+  return role === "owner" ? "contractor" : "owner";
+}
+
+function statusPill(changeOrder, view) {
+  if (changeOrder.status === "accepted")
+    return html`<span class="pill pill-released">Agreed</span>`;
+  if (changeOrder.status === "declined")
+    return html`<span class="pill pill-cancelled">Declined</span>`;
+  if (changeOrder.canDecide)
+    return html`<span class="pill pill-warn">Needs your answer</span>`;
+  return html`<span class="pill pill-warn"
+    >Waiting for ${party(view, other(changeOrder.proposedBy))}</span
+  >`;
+}
+
+function outcome(changeOrder, view) {
+  if (changeOrder.status === "proposed") {
+    return changeOrder.canDecide
+      ? html`<span>Not payable until you agree.</span>`
+      : html`<span
+          >Not payable until ${party(view, other(changeOrder.proposedBy))}
+          agrees.</span
+        >`;
+  }
+  const by = party(view, changeOrder.decidedBy);
+  const when = formatDateTime(changeOrder.decidedAt);
+  if (changeOrder.status === "declined")
+    return html`<span>Declined by ${by} · ${when} · can't be paid</span>`;
+  if (changeOrder.milestone) {
+    return html`<span>Agreed by ${by} · ${when}</span>
+      <a class="extra-link" href="#m-${changeOrder.milestone.id}"
+        >Added to the plan as milestone ${changeOrder.milestone.seq} →</a
+      >`;
+  }
+  return html`<span
+    >Agreed by ${by} · ${when} · no charge, kept on record</span
+  >`;
+}
+
+function changeOrderItem(changeOrder, view) {
+  const asked =
+    changeOrder.requestedBy === changeOrder.proposedBy
+      ? html`Asked for and proposed by ${party(view, changeOrder.proposedBy)}`
+      : html`Asked for by ${party(view, changeOrder.requestedBy)} · proposed by
+        ${party(view, changeOrder.proposedBy)}`;
+  return html`<li class="extra extra-${changeOrder.status}">
+    <div class="extra-main">
+      <p class="extra-desc">
+        <span class="extra-seq">#${changeOrder.seq}</span>
+        ${changeOrder.description}
+      </p>
+      <p class="extra-meta">
+        ${asked} · ${formatDateTime(changeOrder.createdAt)}
+      </p>
+      <p class="extra-meta extra-outcome">${outcome(changeOrder, view)}</p>
+    </div>
+    <div class="extra-side">
+      <strong class="extra-price">${changeOrder.price.display}</strong>
+      ${statusPill(changeOrder, view)}
+      ${
+        changeOrder.canDecide
+          ? html`<div class="btn-row">
+              <button
+                type="button"
+                class="btn btn-ok"
+                data-act="co-accept"
+                data-change-order="${changeOrder.id}"
+              >
+                Agree
+              </button>
+              <button
+                type="button"
+                class="btn btn-secondary"
+                data-act="co-decline"
+                data-change-order="${changeOrder.id}"
+              >
+                Decline
+              </button>
+            </div>`
+          : ""
+      }
+    </div>
+  </li>`;
+}
+
+function proposeForm(view) {
+  const option = (role) =>
+    html`<option value="${role}" ${role === view.role ? "selected" : ""}>
+      ${partyWithRole(view, role)}
+    </option>`;
+  return html`<form class="panel extras-form" data-change-order-form>
+    <h3>Propose an extra</h3>
+    <label class="field">
+      <span>What needs doing, exactly</span>
+      <textarea
+        class="input"
+        name="description"
+        required
+        minlength="3"
+        maxlength="280"
+        rows="2"
+        placeholder="Move the shower valve 30 cm to the left and re-tile around it"
+      ></textarea>
+    </label>
+    <div class="extras-fields">
+      <label class="field">
+        <span>Price (€)</span>
+        <input
+          class="input"
+          name="price"
+          type="text"
+          inputmode="decimal"
+          autocomplete="off"
+          required
+          placeholder="0.00"
+          aria-describedby="extras-price-help"
+        />
+      </label>
+      <label class="field">
+        <span>Asked for by</span>
+        <select class="input" name="requestedBy">
+          ${option("owner")} ${option("contractor")}
+        </select>
+      </label>
+      <button type="submit" class="btn btn-primary">
+        Send to ${party(view, other(view.role))}
+      </button>
+    </div>
+    <p class="small muted" id="extras-price-help" style="margin:0">
+      Up to €${MAX_EXTRA_EUR.toLocaleString("en-IE")}. €0 records a free change.
+      With a price, it becomes a new milestone once
+      ${party(view, other(view.role))} agrees, and is held and proven like the
+      rest.
+    </p>
+  </form>`;
+}
+
+/** @param {any} view */
+export function changeOrdersCard(view) {
+  const changeOrders = view.changeOrders ?? [];
+  const agreed = changeOrders.filter(
+    (changeOrder) => changeOrder.status === "accepted",
+  );
+  const agreedCents = agreed.reduce(
+    (sum, changeOrder) =>
+      sum + Math.round(Number(changeOrder.price.value) * 100),
+    0,
+  );
+  const summary =
+    agreed.length > 0
+      ? html`<span class="pill pill-released"
+          >${agreed.length} agreed ·
+          ${new Intl.NumberFormat("en-IE", {
+            style: "currency",
+            currency: "EUR",
+          }).format(agreedCents / 100)}</span
+        >`
+      : "";
+  return html`<section class="card extras" aria-labelledby="extras-title">
+    <div class="extras-head">
+      <h2 id="extras-title">Changes &amp; extras</h2>
+      ${summary}
+    </div>
+    <p class="extras-lead">
+      Asked for something that wasn't in the plan? Record it here. Nothing
+      outside the plan can be paid, and nothing agreed here can be denied later
+      — it protects both of you.
+    </p>
+    <ul class="extras-rules">
+      <li class="rule-ok">
+        Agreed by both sides → added to the plan, payable like any milestone
+      </li>
+      <li class="rule-bad">
+        Not in the plan or not agreed here → RealPay can't pay for it
+      </li>
+    </ul>
+    ${
+      changeOrders.length > 0
+        ? html`<ol class="extras-list" aria-label="Recorded extras">
+            ${changeOrders
+              .toReversed()
+              .map((changeOrder) => changeOrderItem(changeOrder, view))}
+          </ol>`
+        : html`<p class="small muted extras-empty">
+            No extras recorded yet. The plan is exactly the milestones above.
+          </p>`
+    }
+    ${proposeForm(view)}
+  </section>`;
+}

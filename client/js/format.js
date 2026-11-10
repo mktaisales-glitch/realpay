@@ -121,6 +121,9 @@ export const LEDGER_LABELS = {
   dispute_event_ignored: "Late dispute event ignored",
   paypal_event: "PayPal webhook received",
   demo_clock_advanced: "Demo clock moved forward",
+  change_order_proposed: "Extra proposed",
+  change_order_accepted: "Extra agreed",
+  change_order_declined: "Extra declined",
 };
 
 const DATE_FORMAT = new Intl.DateTimeFormat("en-GB", {

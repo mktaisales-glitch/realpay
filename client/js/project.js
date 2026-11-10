@@ -13,6 +13,11 @@ import {
   render,
   shortHash,
 } from "./format.js";
+import {
+  changeOrdersCard,
+  eurosToCents,
+  MAX_EXTRA_EUR,
+} from "./changeOrders.js";
 import { ganttSvg } from "./gantt.js";
 import { preparePayPal, wirePayPalButtons } from "./paypalCheckout.js";
 import { ask, toast, withBusy } from "./ui.js";
@@ -743,6 +748,10 @@ function ledgerDetail(entry, titles) {
   if (detail.reason) parts.push(String(detail.reason));
   if (detail.kind) parts.push(PAYOUT_LABELS[detail.kind] ?? detail.kind);
   if (detail.days) parts.push(`${detail.days} days`);
+  if (detail.changeOrderId) {
+    parts.push(`extra #${detail.seq}`);
+    if (detail.description) parts.push(String(detail.description));
+  }
   return parts.join(" · ");
 }
 
@@ -816,6 +825,7 @@ function page(view) {
     <div class="milestones">
       ${view.milestones.map((milestone) => milestoneCard(milestone, view))}
     </div>
+    ${changeOrdersCard(view)}
     ${
       demoCard(view)
         ? html`<h2 class="section-title">Demo</h2>
@@ -976,6 +986,10 @@ async function handleAction(button) {
     URL.revokeObjectURL(url);
     return;
   }
+  if (act === "co-accept" || act === "co-decline") {
+    await decideChangeOrder(button, act === "co-accept");
+    return;
+  }
   if (!milestone) return;
 
   if (act === "test-card") {
@@ -1022,6 +1036,85 @@ async function handleAction(button) {
   await whileBusy(button, async () => {
     await milestoneAction(milestoneId, path, body);
     toast(BODILESS[act] ?? "Done.", "ok");
+  });
+}
+
+/* ---------- changes & extras ---------- */
+
+function changeOrdersPath(suffix = "") {
+  return `/api/projects/${encodeURIComponent(projectId)}/change-orders${suffix}`;
+}
+
+/** @param {HTMLFormElement} form */
+async function proposeChangeOrder(form) {
+  const data = new FormData(form);
+  const description = String(data.get("description") ?? "").trim();
+  const priceCents = eurosToCents(String(data.get("price") ?? ""));
+  if (description.length < 3) {
+    toast("Describe the extra in a few words.", "error");
+    return;
+  }
+  if (priceCents === null || priceCents > MAX_EXTRA_EUR * 100) {
+    toast(
+      `Enter a price between €0 and €${MAX_EXTRA_EUR.toLocaleString("en-IE")}, like 120 or 120.50.`,
+      "error",
+    );
+    return;
+  }
+  const button = form.querySelector("button[type=submit]");
+  await whileBusy(button, async () => {
+    const view = await api(changeOrdersPath(), {
+      method: "POST",
+      body: {
+        description,
+        priceCents,
+        requestedBy: data.get("requestedBy"),
+      },
+      token: token(),
+    });
+    form.reset();
+    show(view);
+    const other = view.role === "owner" ? view.contractorName : view.ownerName;
+    toast(`Extra sent to ${other}. It can't be paid until they agree.`, "ok");
+  });
+}
+
+/** @param {HTMLButtonElement} button @param {boolean} accept */
+async function decideChangeOrder(button, accept) {
+  const changeOrder = state.view?.changeOrders?.find(
+    (item) => item.id === button.dataset.changeOrder,
+  );
+  if (!changeOrder) return;
+  const paid = Number(changeOrder.price.value) > 0;
+  let message = `"${changeOrder.description}" stays out of the plan and can't be paid through RealPay. Your answer is recorded in the audit trail.`;
+  if (accept && paid)
+    message = `"${changeOrder.description}" is added to the plan as a new milestone of ${changeOrder.price.display}, funded and proven like the others. Your agreement is recorded in the audit trail.`;
+  else if (accept)
+    message = `"${changeOrder.description}" is recorded as a free change. Your agreement is recorded in the audit trail.`;
+  const answer = await ask({
+    title: accept
+      ? `Agree to extra #${changeOrder.seq}?`
+      : `Decline extra #${changeOrder.seq}?`,
+    message,
+    confirmLabel: accept ? "Agree" : "Decline",
+    danger: !accept,
+  });
+  if (answer === null) return;
+  await whileBusy(button, async () => {
+    const view = await api(
+      changeOrdersPath(
+        `/${encodeURIComponent(changeOrder.id)}/${accept ? "accept" : "decline"}`,
+      ),
+      { method: "POST", body: {}, token: token() },
+    );
+    show(view);
+    const added = view.changeOrders.find(
+      (item) => item.id === changeOrder.id,
+    )?.milestone;
+    if (!accept) toast("Extra declined. It stays out of the plan.");
+    else if (added)
+      toast(`Extra agreed and added as milestone ${added.seq}.`, "ok");
+    else toast("Free extra agreed and kept on record.", "ok");
   });
 }
 
@@ -1090,9 +1183,13 @@ app.addEventListener("click", (event) => {
 
 app.addEventListener("submit", (event) => {
   const form = event.target;
-  if (form instanceof HTMLFormElement && form.dataset.upload) {
+  if (!(form instanceof HTMLFormElement)) return;
+  if (form.dataset.upload) {
     event.preventDefault();
     handleUpload(form).catch(reportError);
+  } else if (form.dataset.changeOrderForm !== undefined) {
+    event.preventDefault();
+    proposeChangeOrder(form).catch(reportError);
   }
 });
 
@@ -1126,6 +1223,14 @@ function canRefresh() {
     return false;
   const active = document.activeElement;
   if (active?.closest("form")) return false;
+  const draft = app.querySelector("[data-change-order-form]");
+  if (
+    draft instanceof HTMLFormElement &&
+    [...new FormData(draft).entries()].some(
+      ([name, value]) => name !== "requestedBy" && String(value).trim(),
+    )
+  )
+    return false;
   return ![...app.querySelectorAll("input[type=file]")].some(
     (input) => input.files?.length,
   );
