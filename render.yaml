@@ -1,0 +1,35 @@
+# Render Blueprint for the public RealPay demo (PayPal sandbox only).
+# Free plan: no persistent disk, so the SQLite file and uploads reset on each
+# deploy or restart. That is fine for a demo; use a paid disk for anything else.
+services:
+  - type: web
+    name: realpay
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeploy: false
+    envVars:
+      - key: TRUST_PROXY
+        value: "1"
+      - key: DEMO_MODE
+        value: "true"
+      - key: AI_PROVIDERS
+        value: gemini,openrouter
+      # Set these in the Render dashboard. They are never committed.
+      - key: PAYPAL_SANDBOX_CLIENT_ID
+        sync: false
+      - key: PAYPAL_SANDBOX_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: SUPPLIER_EMAIL
+        sync: false
+      - key: CONTRACTOR_EMAIL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
