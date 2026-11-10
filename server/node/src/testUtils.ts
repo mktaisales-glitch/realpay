@@ -54,7 +54,7 @@ export const testTemplate: Template = templateSchema.parse({
   id: "test-reno",
   name: "Test renovation",
   description: "A small renovation used by the test suite.",
-  defaultTitle: "Test bathroom",
+  defaultTitle: "Test home renovation",
   proofRole: "Contractor",
   retention: { basisPoints: 500, days: 30 },
   governance: { autoReleaseMaxEur: 650, minConfidence: 0.8 },

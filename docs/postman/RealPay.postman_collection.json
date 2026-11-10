@@ -90,7 +90,7 @@
             "description": "Public, rate limited (30/hour per IP). Saves projectId, ownerToken and contractorToken. Tokens are shown only once.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"templateId\": \"renovation\",\n  \"title\": \"Bathroom renovation (Postman run)\",\n  \"ownerName\": \"Ana\",\n  \"contractorName\": \"Reformas Pérez\"\n}",
+              "raw": "{\n  \"templateId\": \"renovation\",\n  \"title\": \"Home renovation (Postman run)\",\n  \"ownerName\": \"Ana\",\n  \"contractorName\": \"Reformas Pérez\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -357,7 +357,7 @@
                 {
                   "key": "note",
                   "type": "text",
-                  "value": "Bathroom tiling finished."
+                  "value": "Tiling finished."
                 }
               ]
             }
@@ -422,7 +422,7 @@
             "description": "Owner token. Only a milestone IN_REVIEW can be rejected. If the AI already rejected the proof (milestone back to FUNDED), the API answers 409 INVALID_MILESTONE_STATE; the test accepts both outcomes.",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"reason\": \"The photo shows a different room; please send the tiled bathroom.\"\n}",
+              "raw": "{\n  \"reason\": \"The photo shows a different room; please send the tiled room.\"\n}",
               "options": {
                 "raw": {
                   "language": "json"

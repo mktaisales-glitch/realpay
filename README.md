@@ -27,7 +27,7 @@ cp .env.sample .env        # add your sandbox REST app keys
 cd server/node && npm install && npm start
 ```
 
-Open <http://localhost:8080>, pick **Bathroom renovation**, then:
+Open <http://localhost:8080>, pick **Home renovation**, then:
 
 1. **Fund milestone 3** with _Pay with test card_. The money is authorized
    in the sandbox, not charged.
@@ -47,7 +47,7 @@ everything at the end protects the client. Neither works.
 
 Banks solved this long ago for construction loans: the money is released
 in stages, each one after an inspector signs off the work. RealPay brings
-that discipline to a €3,000 bathroom, with an AI inspector and a PayPal
+that discipline to a €3,000 home renovation, with an AI inspector and a PayPal
 authorization on the money.
 
 ### Why this is not another escrow
@@ -143,7 +143,7 @@ site location. Two ship today:
 
 | Template     | Example                                                                                    |
 | ------------ | ------------------------------------------------------------------------------------------ |
-| `renovation` | Bathroom renovation: materials upfront, labour held on proof                               |
+| `renovation` | Home renovation: materials upfront, labour held on proof                                   |
 | `rental`     | First booking with an unknown host: paid once the keys and the apartment match the listing |
 
 Adding a niche means adding a file. The engine does not change.

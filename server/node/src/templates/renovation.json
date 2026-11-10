@@ -1,8 +1,8 @@
 {
   "id": "renovation",
   "name": "Home renovation",
-  "description": "A bathroom renovation paid like a bank construction loan: materials go straight to the supplier, labour is held until the work is proven, and 5% stays back for 30 days as a snagging retention.",
-  "defaultTitle": "Bathroom renovation, Barcelona",
+  "description": "A home renovation paid like a bank construction loan: materials go straight to the supplier, labour is held until the work is proven, and 5% stays back for 30 days as a snagging retention.",
+  "defaultTitle": "Home renovation, Barcelona",
   "proofRole": "Contractor",
   "retention": { "basisPoints": 500, "days": 30 },
   "governance": { "autoReleaseMaxEur": 650, "minConfidence": 0.8 },

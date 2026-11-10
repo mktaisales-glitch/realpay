@@ -4,7 +4,7 @@ info:
   version: 1.0.0
   summary: Milestone payments on PayPal, released only when the work is proven.
   description: |
-    RealPay splits a project (a bathroom renovation, a holiday rental booking) into
+    RealPay splits a project (a home renovation, a holiday rental booking) into
     milestones and funds each one with its own **PayPal Orders v2 order with
     `intent: AUTHORIZE`**:
 
@@ -159,7 +159,7 @@ paths:
               $ref: "#/components/schemas/CreateProjectRequest"
             example:
               templateId: renovation
-              title: Bathroom renovation, Barcelona
+              title: Home renovation, Barcelona
               ownerName: Ana
               contractorName: Reformas Pérez
       responses:
@@ -522,7 +522,7 @@ paths:
             schema:
               $ref: "#/components/schemas/ReasonRequest"
             example:
-              reason: The photo shows a different room; please send the tiled bathroom.
+              reason: The photo shows a different room; please send the tiled room.
       responses:
         "200":
           $ref: "#/components/responses/ProjectView"
@@ -1504,7 +1504,7 @@ components:
           type: string
         defaultTitle:
           type: string
-          example: Bathroom renovation, Barcelona
+          example: Home renovation, Barcelona
         proofRole:
           type: string
           description: Display name of the party that uploads proofs.
