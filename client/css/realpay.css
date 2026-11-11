@@ -13,9 +13,9 @@
   --line: #dde3ec;
   --brand: #0f2a4a;
   --brand-ink: #ffffff;
-  --accent: #0070e0;
+  --accent: #0066cc;
   --accent-soft: #e6f1fd;
-  --ok: #0a7f55;
+  --ok: #08744d;
   --ok-soft: #e3f5ed;
   --warn: #9a5b00;
   --warn-soft: #fdf1dc;
@@ -76,6 +76,9 @@ body {
   color: var(--ink);
   font: 15px/1.5 var(--font);
   -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 h1,
@@ -159,9 +162,17 @@ select {
 }
 
 .container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
   max-width: 1120px;
   margin: 0 auto;
   padding: 28px 24px 80px;
+}
+
+.container > main {
+  flex: 1;
 }
 
 .card {
@@ -422,7 +433,7 @@ select {
   color: var(--ink-2);
 }
 
-.template .btn {
+.template form {
   margin-top: auto;
 }
 
@@ -491,7 +502,6 @@ select {
   font-family: var(--font-display);
   font-weight: 800;
   font-size: 21px;
-  font-variant-numeric: tabular-nums;
 }
 
 .totals .held dd {
@@ -595,7 +605,6 @@ select {
   font-family: var(--font-display);
   font-weight: 800;
   font-size: 22px;
-  font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
@@ -707,7 +716,6 @@ select {
 
 paypal-message {
   display: block;
-  min-height: 20px;
 }
 
 .divider-or {
@@ -1223,7 +1231,6 @@ details > summary {
 .extra-price {
   font-family: var(--font-display);
   font-size: 18px;
-  font-variant-numeric: tabular-nums;
 }
 
 .extras-propose > summary.btn {
@@ -1653,7 +1660,6 @@ details[open] > summary .chev {
   font-weight: 800;
   font-size: clamp(38px, 8vw, 52px);
   line-height: 1;
-  font-variant-numeric: tabular-nums;
 }
 
 .balance-sub {
@@ -2242,4 +2248,64 @@ details[open] > summary .chev {
 
 .template-plan .rules {
   margin: 10px 0 0;
+}
+
+.swipe-hint {
+  display: none;
+}
+
+/* Phones: one-line fold headers, a hint for the wide schedule and tap
+   targets of at least 44px. Kept last so it wins over the rules above. */
+@media (width <= 560px) {
+  .fold-head {
+    flex-wrap: nowrap;
+  }
+
+  .fold-head > h2 {
+    flex: none;
+  }
+
+  .fold-head .pill {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .swipe-hint {
+    display: block;
+    margin: 0;
+    padding: 0 18px;
+  }
+
+  .btn-link,
+  .fold-inline > summary,
+  .balance-more > summary,
+  .template-plan > summary,
+  .hero-link {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .template-plan > summary {
+    display: flex;
+  }
+
+  .role-switch button {
+    min-height: 44px;
+  }
+
+  .chip {
+    height: 40px;
+  }
+
+  .next {
+    flex-wrap: wrap;
+    border-radius: 24px;
+  }
+
+  .next-label {
+    white-space: nowrap;
+  }
 }

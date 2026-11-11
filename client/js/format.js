@@ -64,7 +64,7 @@ export function render(element, markup) {
 export const STATUS_LABELS = {
   PLANNED: "Not funded",
   FUNDED: "On hold",
-  IN_REVIEW: "Proof in review",
+  IN_REVIEW: "Checking proof",
   RELEASED: "Released",
   CLOSED: "Closed",
   CANCELLED: "Cancelled",
@@ -99,8 +99,8 @@ export const PAYOUT_LABELS = {
 export const LEDGER_LABELS = {
   project_created: "Project created",
   order_created: "PayPal order created",
-  funds_authorized: "Funds authorized, not charged yet",
-  funds_reauthorized: "Authorization renewed",
+  funds_authorized: "Funds put on hold, not charged yet",
+  funds_reauthorized: "Hold renewed",
   funding_declined: "Payment declined",
   upfront_captured: "Materials payment captured",
   payout_sent: "Payout sent",

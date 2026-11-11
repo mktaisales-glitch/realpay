@@ -200,7 +200,7 @@ function roleSwitch(view) {
     html`<button
       type="button"
       data-role="${role}"
-      aria-pressed="${view.role === role}"
+      aria-pressed="${view.role === role ? "true" : "false"}"
     >
       ${label}
     </button>`;
@@ -260,7 +260,7 @@ const PAYOUT_STATUS = {
   PENDING: { text: "On its way", tone: "state-held" },
   PROCESSING: { text: "On its way", tone: "state-held" },
   NEW: { text: "On its way", tone: "state-held" },
-  ONHOLD: { text: "Paused by PayPal for review", tone: "state-held" },
+  ONHOLD: { text: "PayPal paused this for review", tone: "state-held" },
   UNCLAIMED: {
     text: "Waiting for the recipient to claim it",
     tone: "state-held",
@@ -327,7 +327,7 @@ function splitBlock(milestone) {
     >`;
   else if (milestone.authorization?.expired)
     heldState = html`<span class="state state-bad"
-      >⛔ Authorization expired · not charged</span
+      >⛔ Hold expired · not charged</span
     >`;
   else if (status === "FUNDED" || status === "IN_REVIEW")
     heldState = html`<span class="state state-held"
@@ -335,7 +335,7 @@ function splitBlock(milestone) {
     >`;
   else if (status === "CANCELLED")
     heldState = html`<span class="state state-pending"
-      >Authorization voided · not charged</span
+      >Hold voided · not charged</span
     >`;
 
   return html`<div class="split">
@@ -534,7 +534,12 @@ function confidenceLine(proof, proofType) {
     Math.round(verdict.confidence * 100),
   );
   return html`<div class="confidence">
-    <meter min="0" max="100" value="${confidence}"></meter>
+    <meter
+      min="0"
+      max="100"
+      value="${confidence}"
+      aria-label="AI confidence"
+    ></meter>
     AI confidence ${confidence}% · work
     ${verdict.met ? "matches" : "does not match"} the checklist
   </div>`;
@@ -619,7 +624,12 @@ function disputeBlock(milestone) {
     </h4>
     <div class="meta-row">
       <span class="mono">${dispute.id}</span
-      ><span>Status: <strong>${dispute.status}</strong></span>
+      ><span
+        >Status:
+        <strong
+          >${String(dispute.status).toLowerCase().replaceAll("_", " ")}</strong
+        ></span
+      >
     </div>
     <p class="small muted" style="margin:0">
       RealPay's evidence pack holds every proof, its hash, the AI verdict and
@@ -948,7 +958,7 @@ function shareCard(view) {
 function demoCard(view) {
   if (!view.demoMode || view.role !== "owner") return "";
   return html`<div class="card demo">
-    <h3>Sandbox clock</h3>
+    <h2>Sandbox clock</h2>
     <p class="small muted" style="margin:0">
       PayPal sandbox only: no real money moves. Move the project clock to see
       retention and expiring holds without waiting.
@@ -1026,7 +1036,8 @@ function ledgerCard(view) {
           ? html`<span
               class="pill pill-released"
               title="Each entry includes the SHA-256 of the one before it"
-              >Hash chain intact · ${integrity.entries} entries ·
+              >Hash chain intact · ${integrity.entries}
+              ${integrity.entries === 1 ? "entry" : "entries"} ·
               ${shortHash(integrity.headHash)}</span
             >`
           : html`<span class="pill pill-cancelled">Tampering detected</span>`
@@ -1060,7 +1071,8 @@ const DOTS = raw(
 );
 
 function page(view) {
-  const people = html`${view.ownerName} pays · ${view.contractorName} delivers`;
+  const people = html`${view.ownerName} pays · ${view.contractorName} delivers ·
+  AI inspector checks the proof`;
   const step = nextStep(view);
   state.focus = step.milestone?.id ?? "";
   const share = shareCard(view);
@@ -1108,6 +1120,7 @@ function page(view) {
         <h2>Schedule</h2>
         <span class="chev" aria-hidden="true"></span>
       </summary>
+      <p class="small muted swipe-hint">Swipe sideways to see the dates</p>
       ${schedule(view)}
     </details>
     ${ledgerCard(view)}
@@ -1182,8 +1195,8 @@ const CONFIRMATIONS = {
   cancel: (m) => ({
     title: "Cancel this milestone?",
     message: m.authorization?.expired
-      ? `The authorization for ${m.held.display} already expired, so you were never charged for it. Money already paid to the supplier is not refunded here.`
-      : `The authorization for ${m.held.display} is voided and you are not charged for it. Money already paid to the supplier is not refunded here.`,
+      ? `The hold for ${m.held.display} already expired, so you were never charged for it. Money already paid to the supplier is not refunded here.`
+      : `The hold for ${m.held.display} is voided and you are not charged for it. Money already paid to the supplier is not refunded here.`,
     confirmLabel: "Cancel milestone",
     danger: true,
   }),
@@ -1213,7 +1226,7 @@ const CONFIRMATIONS = {
 const BODILESS = {
   approve: "Funds released through PayPal.",
   cancel: "Milestone cancelled. You were not charged for the part on hold.",
-  reauthorize: "Authorization renewed for another period.",
+  reauthorize: "Hold renewed for another period.",
   "release-retention": "Retention paid to the contractor.",
   "submit-evidence": "Evidence pack sent to PayPal.",
   "retry-upfront": "Supplier payment retried.",
@@ -1288,7 +1301,7 @@ async function handleAction(button) {
       } catch (error) {
         if (decline && error instanceof ApiError) {
           toast(
-            `Card declined by PayPal (${error.message}). Nothing was authorized or charged.`,
+            `PayPal declined the card (${error.message}). Nothing was put on hold or charged.`,
             "error",
           );
           show(await fetchView());

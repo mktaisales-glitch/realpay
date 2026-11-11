@@ -56,7 +56,7 @@ export function stage(milestone) {
         return {
           key: "warn",
           step: 1,
-          label: "Authorization expired",
+          label: "Hold expired",
           detail: "Fund again to continue",
         };
       if (disputed)
@@ -202,7 +202,11 @@ export function balanceHero(view, { next = "", details = "" } = {}) {
     <div class="balance-top">
       <span id="balance-title" class="balance-label">On hold</span>
       <span class="balance-hint"
-        >Authorized on the homeowner's PayPal, not charged yet</span
+        >${
+          sums.held === 0 && sums.released === 0
+            ? "Nothing on hold yet. Fund milestone 1 to start."
+            : "Authorized on the homeowner's PayPal, not charged yet"
+        }</span
       >
     </div>
     <div class="balance-amount">${formatCents(sums.held)}</div>
