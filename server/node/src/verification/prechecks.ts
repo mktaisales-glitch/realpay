@@ -146,7 +146,9 @@ export async function runPrechecks(
       takenAt instanceof Date && !Number.isNaN(takenAt.getTime())
         ? takenAt.toISOString()
         : null;
-    exif.software = raw.Software ?? null;
+    // Free text written by the camera or an editor: keep a short label only.
+    exif.software =
+      raw.Software == null ? null : String(raw.Software).slice(0, 80);
     if (typeof raw.latitude === "number" && typeof raw.longitude === "number") {
       exif.latitude = raw.latitude;
       exif.longitude = raw.longitude;

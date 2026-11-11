@@ -24,6 +24,8 @@ import { DomainError } from "./domainError.ts";
 import {
   MAX_CHANGE_ORDER_CENTS,
   MAX_CHANGE_ORDERS_PER_PROJECT,
+  MAX_CLOCK_OFFSET_DAYS,
+  MAX_DEMO_LEDGER_ENTRIES,
   MAX_OPEN_CHANGE_ORDERS_PER_PROJECT,
   MAX_PROOFS_PER_MILESTONE,
   MIN_CHANGE_ORDER_CENTS,
@@ -38,7 +40,12 @@ let ms1: string; // EUR 100 upfront + EUR 300 held (under the EUR 650 cap)
 let ms2: string; // EUR 500 upfront + EUR 1,000 held (over the cap)
 
 function setUp(
-  options: { demoMode?: boolean; aiCallsPerProjectPerDay?: number } = {},
+  options: {
+    demoMode?: boolean;
+    aiCallsPerProjectPerDay?: number;
+    projectsPerDay?: number;
+    demoCardFundingsPerDay?: number;
+  } = {},
 ) {
   t = createTestService(options);
   const created = t.createProject();
@@ -56,6 +63,72 @@ function actions(milestoneId?: string) {
 function upload(label: string) {
   return { fileName: `${label}.jpg`, bytes: sitePhoto(label) };
 }
+
+describe("limits that keep a public demo from being flooded", () => {
+  it("stops creating projects once today's total is reached", () => {
+    setUp({ projectsPerDay: 2 });
+    t.createProject();
+
+    expect(() => t.createProject()).toThrow(
+      expect.objectContaining({ statusCode: 429, code: "DAILY_LIMIT_REACHED" }),
+    );
+  });
+
+  it("stops test-card payments once today's total is reached, declines included", async () => {
+    setUp({ demoMode: true, demoCardFundingsPerDay: 2 });
+    await t.service.fundWithCard(projectId, ms1, DECLINED_CARD).catch(() => {});
+    await t.service.fundWithCard(projectId, ms1, APPROVED_CARD);
+
+    await expectDomainError(
+      t.service.fundWithCard(projectId, ms2, APPROVED_CARD),
+      429,
+      "DAILY_LIMIT_REACHED",
+    );
+    expect(t.paypal.fundWithCard).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not count PayPal wallet payments as test-card payments", async () => {
+    setUp({ demoMode: true, demoCardFundingsPerDay: 1 });
+    await fundWithPayPalWallet();
+
+    const funded = await t.service.fundWithCard(projectId, ms2, APPROVED_CARD);
+
+    expect(funded.status).toBe("FUNDED");
+  });
+
+  it("does not let the demo clock run more than a year ahead", () => {
+    setUp({ demoMode: true });
+    for (let moved = 0; moved < MAX_CLOCK_OFFSET_DAYS; moved += 5) {
+      t.service.advanceClock(projectId, 5);
+    }
+
+    expect(() => t.service.advanceClock(projectId, 1)).toThrow(
+      expect.objectContaining({ statusCode: 409, code: "CLOCK_LIMIT_REACHED" }),
+    );
+  });
+
+  it("stops demo controls once the audit trail is very long", async () => {
+    setUp({ demoMode: true });
+    await t.service.fundWithCard(projectId, ms1, APPROVED_CARD);
+    const filler = t.db.prepare(
+      `INSERT INTO ledger (project_id, actor, action, detail, created_at, prev_hash, hash)
+       SELECT project_id, 'system', 'filler', '{}', created_at, hash, hash || ?
+       FROM ledger WHERE project_id = ? ORDER BY seq DESC LIMIT 1`,
+    );
+    for (let row = 0; row < MAX_DEMO_LEDGER_ENTRIES; row += 1) {
+      filler.run(String(row), projectId);
+    }
+
+    expect(() => t.service.advanceClock(projectId, 1)).toThrow(
+      expect.objectContaining({ statusCode: 409, code: "DEMO_LIMIT_REACHED" }),
+    );
+    await expectDomainError(
+      t.service.openDemoDispute(projectId, ms1),
+      409,
+      "DEMO_LIMIT_REACHED",
+    );
+  });
+});
 
 async function expectDomainError(
   promise: Promise<unknown>,

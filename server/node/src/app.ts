@@ -13,6 +13,7 @@ import type { Db } from "./db/database.ts";
 import type { MilestoneService } from "./domain/milestoneService.ts";
 import type { Template } from "./domain/templates.ts";
 import errorMiddleware from "./middleware/errorMiddleware.ts";
+import { jsonRateLimit } from "./middleware/rateLimit.ts";
 import {
   createPayPalRouter,
   type RawBodyRequest,
@@ -99,6 +100,9 @@ export function createApp({ config, db, service, templates }: AppDependencies) {
     response.json({ status: "ok" });
   });
   app.use("/paypal-api", createPayPalRouter({ config, db, service }));
+  // A ceiling for every project route, on top of the tighter limits each
+  // costly route has. PayPal's webhooks arrive on /paypal-api, outside it.
+  app.use("/api", jsonRateLimit(60 * 1000, 300));
   app.use("/api", createProjectRouter({ config, db, service, templates }));
   app.use(["/api", "/paypal-api"], (_request: Request, response: Response) => {
     response

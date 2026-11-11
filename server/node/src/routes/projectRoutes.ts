@@ -115,6 +115,8 @@ export function createProjectRouter({
   const changeOrderLimiter = jsonRateLimit(60 * 60 * 1000, 30);
   // Every route below that calls PayPal: keeps a script from hammering it.
   const paypalLimiter = jsonRateLimit(60 * 1000, 30);
+  // Demo controls call nobody, but each one writes to the audit trail.
+  const demoLimiter = jsonRateLimit(60 * 1000, 20);
 
   /** Demo controls do not exist outside demo mode, whoever asks. */
   function demoOnly(
@@ -460,16 +462,24 @@ export function createProjectRouter({
     paypalLimiter,
     fundWithTestCardRouteHandler,
   );
-  router.post(`${ms}/demo/dispute`, demoOnly, owner, openDisputeRouteHandler);
+  router.post(
+    `${ms}/demo/dispute`,
+    demoOnly,
+    demoLimiter,
+    owner,
+    openDisputeRouteHandler,
+  );
   router.post(
     `${ms}/demo/dispute/resolve`,
     demoOnly,
+    demoLimiter,
     owner,
     resolveDisputeRouteHandler,
   );
   router.post(
     "/projects/:projectId/demo/advance-clock",
     demoOnly,
+    demoLimiter,
     owner,
     advanceClockRouteHandler,
   );

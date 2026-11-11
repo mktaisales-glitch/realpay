@@ -183,7 +183,14 @@ export function createFakeVerifier() {
 export function createTestService({
   demoMode = false,
   aiCallsPerProjectPerDay,
-}: { demoMode?: boolean; aiCallsPerProjectPerDay?: number } = {}) {
+  projectsPerDay,
+  demoCardFundingsPerDay,
+}: {
+  demoMode?: boolean;
+  aiCallsPerProjectPerDay?: number;
+  projectsPerDay?: number;
+  demoCardFundingsPerDay?: number;
+} = {}) {
   const db = openDatabase(":memory:");
   const paypal = createFakeGateway();
   const verifier = createFakeVerifier();
@@ -198,6 +205,8 @@ export function createTestService({
     uploadDir,
     demoMode,
     aiCallsPerProjectPerDay,
+    projectsPerDay,
+    demoCardFundingsPerDay,
     now: () => FIXED_NOW,
   });
 

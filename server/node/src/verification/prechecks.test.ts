@@ -118,6 +118,14 @@ describe("runPrechecks", () => {
     expect(result.hardFlags).toEqual([]);
   });
 
+  it("keeps only the first 80 characters of the software tag", async () => {
+    const result = await checks({
+      bytes: jpegWithSoftware(`Camera ${"x".repeat(300)}`),
+      proofType: "photo",
+    });
+    expect(result.exif.software).toHaveLength(80);
+  });
+
   it("does not flag ordinary camera firmware as editing software", async () => {
     const result = await checks({
       bytes: jpegWithSoftware("Camera firmware 1.2"),

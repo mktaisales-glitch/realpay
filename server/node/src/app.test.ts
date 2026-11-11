@@ -302,6 +302,26 @@ describe("demo controls", () => {
   });
 });
 
+describe("demo controls under a burst of calls", () => {
+  it("answer 429 after 20 clock moves in a minute", async () => {
+    const { app, project, owner } = setUp({ demoMode: true });
+    const moveClock = () =>
+      request(app)
+        .post(`/api/projects/${project.projectId}/demo/advance-clock`)
+        .set("Authorization", owner)
+        .send({ days: 1 });
+
+    for (let call = 0; call < 20; call += 1) {
+      const allowed = await moveClock();
+      expect(allowed.status).toBe(200);
+    }
+    const blocked = await moveClock();
+
+    expect(blocked.status).toBe(429);
+    expect(blocked.body.error).toBe("TOO_MANY_REQUESTS");
+  });
+});
+
 describe("demo controls without a link", () => {
   it("answer 404 before asking for a token when DEMO_MODE is off", async () => {
     const { app, ms } = setUp({ demoMode: false });

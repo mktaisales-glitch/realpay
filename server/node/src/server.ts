@@ -55,6 +55,8 @@ const service = createMilestoneService({
   uploadDir: config.UPLOAD_DIR,
   demoMode: config.DEMO_MODE,
   aiCallsPerProjectPerDay: config.AI_CALLS_PER_PROJECT_PER_DAY,
+  projectsPerDay: config.PROJECTS_PER_DAY,
+  demoCardFundingsPerDay: config.DEMO_CARD_FUNDINGS_PER_DAY,
 });
 
 const app = createApp({ config, db, service, templates });

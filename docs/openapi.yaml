@@ -43,7 +43,8 @@ info:
     `error` is a stable machine-readable code (for example `INVALID_MILESTONE_STATE`).
     Request validation failures return `400` with `error: "Bad Request"`; a body that is
     not valid JSON returns `400` too, and one over the size limit `413 PAYLOAD_TOO_LARGE`.
-    Rate limits answer `429 TOO_MANY_REQUESTS`. Errors returned by PayPal become
+    Rate limits answer `429 TOO_MANY_REQUESTS`: every `/api` route shares 300 calls a
+    minute per client, and the busier routes have tighter limits of their own. Errors returned by PayPal become
     `error: "PAYPAL_ERROR"` with PayPal's own description and
     `details: { name, debugId, issue }`, so a support ticket can quote PayPal's `debug_id`.
     They keep PayPal's status (for example `422`), except a PayPal outage (`5xx`) or PayPal
@@ -188,7 +189,17 @@ paths:
                 error: TEMPLATE_NOT_FOUND
                 errorDescription: No template "nope".
         "429":
-          $ref: "#/components/responses/RateLimited"
+          description: |
+            - `TOO_MANY_REQUESTS`: more than 30 new projects in an hour from this client.
+            - `DAILY_LIMIT_REACHED`: the instance has created its daily maximum of projects
+              (`PROJECTS_PER_DAY`, 300 by default). Try again the next UTC day.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: DAILY_LIMIT_REACHED
+                errorDescription: This demo has reached today's limit of new projects. Try again tomorrow.
 
   /api/projects/{projectId}:
     parameters:
@@ -758,6 +769,15 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "429":
+          description: |
+            - `TOO_MANY_REQUESTS`: too many payment calls from this client.
+            - `DAILY_LIMIT_REACHED`: the instance has used its daily maximum of test-card
+              payments (`DEMO_CARD_FUNDINGS_PER_DAY`, 100 by default; declines count too).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "503":
           description: "`TEST_CARD_MISSING`: `DEMO_TEST_CARD` is not configured."
           content:
@@ -795,11 +815,15 @@ paths:
         "404":
           $ref: "#/components/responses/DemoOrMilestoneNotFound"
         "409":
-          description: "`INVALID_MILESTONE_STATE`: status is not `FUNDED`, `IN_REVIEW` or `RELEASED`."
+          description: |
+            - `INVALID_MILESTONE_STATE`: status is not `FUNDED`, `IN_REVIEW` or `RELEASED`.
+            - `DEMO_LIMIT_REACHED`: the project already has 2,000 audit entries.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /api/projects/{projectId}/milestones/{milestoneId}/demo/dispute/resolve:
     parameters:
@@ -830,6 +854,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /api/projects/{projectId}/change-orders:
     parameters:
@@ -1022,7 +1048,9 @@ paths:
         **Demo only (404 unless `DEMO_MODE=true`).** Moves this project's clock forward by
         `days` (cumulative), so retention periods and schedules can be shown without
         waiting. Affects `today`, retention due dates and proof date windows of this
-        project only; PayPal authorization expiry is real time and is not affected.
+        project only; PayPal authorization expiry is real time and is not affected. The
+        clock can run at most 365 days ahead. Demo controls share 20 calls a minute per
+        client.
       x-demo-only: true
       x-roles: [owner]
       requestBody:
@@ -1044,6 +1072,19 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/DemoDisabled"
+        "409":
+          description: |
+            - `CLOCK_LIMIT_REACHED`: the clock would be more than 365 days ahead.
+            - `DEMO_LIMIT_REACHED`: the project already has 2,000 audit entries.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: CLOCK_LIMIT_REACHED
+                errorDescription: The demo clock cannot run more than 365 days ahead.
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /paypal-api/auth/browser-safe-client-id:
     get:
@@ -1458,7 +1499,8 @@ components:
             `REAUTHORIZE_NOT_SUPPORTED`, `REAUTHORIZE_ALREADY_USED`,
             `REAUTHORIZATION_TOO_SOON`, `AUTHORIZATION_EXPIRED`, `RETENTION_ALREADY_PAID`,
             `EVIDENCE_ALREADY_SUBMITTED`. PayPal: `PAYPAL_ERROR`. Limits:
-            `PAYLOAD_TOO_LARGE`, `TOO_MANY_REQUESTS`. Validation: `Bad Request`. Upload limits: `LIMIT_FILE_SIZE`, `LIMIT_UNEXPECTED_FILE`,
+            `PAYLOAD_TOO_LARGE`, `TOO_MANY_REQUESTS`, `DAILY_LIMIT_REACHED`,
+            `CLOCK_LIMIT_REACHED`, `DEMO_LIMIT_REACHED`. Validation: `Bad Request`. Upload limits: `LIMIT_FILE_SIZE`, `LIMIT_UNEXPECTED_FILE`,
             `LIMIT_FILE_COUNT`, `LIMIT_FIELD_COUNT`. Fallbacks: `Not Found`,
             `Internal Server Error`.
           example: INVALID_MILESTONE_STATE

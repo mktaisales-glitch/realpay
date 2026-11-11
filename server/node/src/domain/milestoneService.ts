@@ -16,6 +16,9 @@ import type { WebhookHeaders } from "../customApiEndpoints/webhooks.ts";
 import type { Db } from "../db/database.ts";
 import {
   countAiVerdictsSince,
+  countCardFundingsSince,
+  countLedgerEntries,
+  countProjectsCreatedSince,
   countProofs,
   cancelChangeOrderRow,
   decideChangeOrderRow,
@@ -107,6 +110,12 @@ const SETTLED_STATUSES = new Set<MilestoneStatus>([
 ]);
 
 export const DEFAULT_AI_CALLS_PER_PROJECT_PER_DAY = 10;
+export const DEFAULT_PROJECTS_PER_DAY = 300;
+export const DEFAULT_DEMO_CARD_FUNDINGS_PER_DAY = 100;
+/** The demo clock cannot run further ahead than this, in total. */
+export const MAX_CLOCK_OFFSET_DAYS = 365;
+/** Demo controls stop adding to an audit trail of this size. */
+export const MAX_DEMO_LEDGER_ENTRIES = 2000;
 
 export type ServiceDependencies = {
   db: Db;
@@ -119,6 +128,10 @@ export type ServiceDependencies = {
   demoMode: boolean;
   /** AI calls one project may make per UTC day; the rest go to a person. */
   aiCallsPerProjectPerDay?: number;
+  /** New projects per UTC day, counting every visitor. */
+  projectsPerDay?: number;
+  /** Sandbox test-card fundings per UTC day, counting every visitor. */
+  demoCardFundingsPerDay?: number;
   now?: () => Date;
 };
 
@@ -854,9 +867,37 @@ export function createMilestoneService(deps: ServiceDependencies) {
     return reload(milestone);
   }
 
+  function startOfUtcDay() {
+    return `${now().toISOString().slice(0, 10)}T00:00:00.000Z`;
+  }
+
+  /**
+   * Demo controls cost nothing to call, and every call adds to an audit
+   * trail that is re-hashed on each view. Past this size they stop.
+   */
+  function requireDemoLedgerRoom(projectId: string) {
+    if (countLedgerEntries(db, projectId) >= MAX_DEMO_LEDGER_ENTRIES) {
+      throw new DomainError(
+        409,
+        "DEMO_LIMIT_REACHED",
+        "This demo project has reached its activity limit. Create a new project to keep testing.",
+        { maxEntries: MAX_DEMO_LEDGER_ENTRIES },
+      );
+    }
+  }
+
   /* ---------- projects ---------- */
 
   function createProject(input: CreateProjectInput): CreatedProject {
+    const projectsPerDay = deps.projectsPerDay ?? DEFAULT_PROJECTS_PER_DAY;
+    if (countProjectsCreatedSince(db, startOfUtcDay()) >= projectsPerDay) {
+      throw new DomainError(
+        429,
+        "DAILY_LIMIT_REACHED",
+        "This demo has reached today's limit of new projects. Try again tomorrow.",
+        { max: projectsPerDay },
+      );
+    }
     const template = deps.templates.get(input.templateId);
     if (!template) {
       throw new DomainError(
@@ -951,6 +992,15 @@ export function createMilestoneService(deps: ServiceDependencies) {
       );
     }
     const project = requireProject(projectId);
+    if (project.clockOffsetDays + days > MAX_CLOCK_OFFSET_DAYS) {
+      throw new DomainError(
+        409,
+        "CLOCK_LIMIT_REACHED",
+        `The demo clock cannot run more than ${MAX_CLOCK_OFFSET_DAYS} days ahead.`,
+        { max: MAX_CLOCK_OFFSET_DAYS, current: project.clockOffsetDays },
+      );
+    }
+    requireDemoLedgerRoom(projectId);
     setClockOffset(db, projectId, project.clockOffsetDays + days);
     ledger(project, null, "system", "demo_clock_advanced", {
       detail: { days },
@@ -1303,6 +1353,16 @@ export function createMilestoneService(deps: ServiceDependencies) {
     const { project, milestone } = requireMilestone(projectId, milestoneId);
     return withLock(milestone.id, async () => {
       requireStatus(milestone, ["PLANNED"], "fund");
+      const cardFundingsPerDay =
+        deps.demoCardFundingsPerDay ?? DEFAULT_DEMO_CARD_FUNDINGS_PER_DAY;
+      if (countCardFundingsSince(db, startOfUtcDay()) >= cardFundingsPerDay) {
+        throw new DomainError(
+          429,
+          "DAILY_LIMIT_REACHED",
+          "This demo has reached today's limit of test-card payments. Try again tomorrow.",
+          { max: cardFundingsPerDay },
+        );
+      }
       const attempt = fundingAttempt(milestone);
       const result = await declineOnError(project, milestone, () =>
         paypal.fundWithCard(
@@ -1502,9 +1562,8 @@ export function createMilestoneService(deps: ServiceDependencies) {
       });
 
       let verdict = null;
-      const startOfDay = `${now().toISOString().slice(0, 10)}T00:00:00.000Z`;
       const aiCapReached =
-        countAiVerdictsSince(db, project.id, startOfDay) >=
+        countAiVerdictsSince(db, project.id, startOfUtcDay()) >=
         (deps.aiCallsPerProjectPerDay ?? DEFAULT_AI_CALLS_PER_PROJECT_PER_DAY);
       if (checks.hardFlags.length === 0 && checks.mimeType && aiCapReached) {
         // One project cannot drain the shared free AI quota: past its
@@ -1795,6 +1854,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
       );
     }
     const { milestone: target } = requireMilestone(projectId, milestoneId);
+    requireDemoLedgerRoom(projectId);
     return withLock(target.id, async () => {
       const { project, milestone } = requireMilestone(projectId, milestoneId);
       requireStatus(milestone, ["FUNDED", "IN_REVIEW", "RELEASED"], "dispute");

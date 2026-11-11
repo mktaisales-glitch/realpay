@@ -42,6 +42,14 @@ const configSchema = z.object({
     .int()
     .nonnegative()
     .default(10),
+  // Totals per UTC day counting every visitor: a public demo cannot be
+  // used to flood the database or the PayPal sandbox account.
+  PROJECTS_PER_DAY: z.coerce.number().int().nonnegative().default(300),
+  DEMO_CARD_FUNDINGS_PER_DAY: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(100),
 
   PORT: z.coerce.number().int().positive().default(8080),
   DATABASE_PATH: z.string().default("data/realpay.db"),

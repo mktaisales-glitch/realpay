@@ -482,6 +482,39 @@ export function countAiVerdictsSince(
   return row?.total ?? 0;
 }
 
+/** How many ledger entries a project has: the audit trail is re-hashed on every view. */
+export function countLedgerEntries(db: Db, projectId: string): number {
+  const row = db
+    .prepare<[string], { total: number }>(
+      "SELECT COUNT(*) AS total FROM ledger WHERE project_id = ?",
+    )
+    .get(projectId);
+  return row?.total ?? 0;
+}
+
+/** How many projects were created, by anyone, since `since` (ISO time). */
+export function countProjectsCreatedSince(db: Db, since: string): number {
+  const row = db
+    .prepare<[string], { total: number }>(
+      `SELECT COUNT(*) AS total FROM ledger
+       WHERE action = 'project_created' AND created_at >= ?`,
+    )
+    .get(since);
+  return row?.total ?? 0;
+}
+
+/** How many test-card fundings were tried, by anyone, since `since` (ISO time). */
+export function countCardFundingsSince(db: Db, since: string): number {
+  const row = db
+    .prepare<[string], { total: number }>(
+      `SELECT COUNT(*) AS total FROM ledger
+       WHERE action IN ('funds_authorized', 'funding_declined')
+         AND detail LIKE '%"method":"card"%' AND created_at >= ?`,
+    )
+    .get(since);
+  return row?.total ?? 0;
+}
+
 export function getPayout(
   db: Db,
   milestoneId: string,

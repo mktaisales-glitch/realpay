@@ -32,8 +32,12 @@ No real money is ever involved, but reports are still taken seriously.
 
 **Limits**
 
-- Per client IP: 30 new projects an hour, 20 proof uploads every
-  10 minutes and 25 a day, 60 webhook calls a minute.
+- Per client IP: 300 calls a minute across `/api`, 30 new projects an
+  hour, 20 proof uploads every 10 minutes and 25 a day, 60 webhook calls
+  a minute.
+- Per instance and UTC day: 300 new projects and 100 test-card payments
+  (`PROJECTS_PER_DAY`, `DEMO_CARD_FUNDINGS_PER_DAY`), so many clients
+  together cannot fill the disk or wear out the sandbox account.
 - Per milestone: at most 8 proofs. After that the homeowner has to review
   them or open a dispute.
 - Extras: EUR 10 to EUR 2,000 each (or free), at most 50% of the original
@@ -42,6 +46,9 @@ No real money is ever involved, but reports are still taken seriously.
   proposed or accepted while a dispute is open.
 - AI calls: 10 per project a day and 150 for the whole instance, so a
   single link cannot drain the model quota.
+- Demo controls: 20 calls a minute per client IP. The demo clock stops
+  365 days ahead, and the clock and simulated disputes stop once a
+  project has 2,000 audit entries.
 - Behind a reverse proxy, set `TRUST_PROXY` to the number of proxies
   (1 on Render). Left at 0 there, every visitor shares the proxy's IP;
   set too high, anyone can choose their own IP with `X-Forwarded-For`.
@@ -99,3 +106,10 @@ No real money is ever involved, but reports are still taken seriously.
   public sandbox demo only.
 - Anyone holding a capability link can act as that role. Treat the links
   like passwords.
+- `requestedBy` on a change order is what the proposer says, not a
+  verified fact. `proposedBy` always comes from the link that was used,
+  and an extra only counts once the other party accepts it.
+- Privacy: this is a public sandbox demo. A proof photo, its EXIF data
+  (including GPS) and the note are shown to the other party and sent to
+  the configured AI providers. Do not upload real personal photos or
+  documents.
