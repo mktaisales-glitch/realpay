@@ -9,7 +9,7 @@ proof against the milestone's checklist, and only then does PayPal capture
 and pay out. Anything the AI is unsure about goes to a person, never
 straight to the contractor.
 
-[![Payments via PayPal (sandbox)](https://img.shields.io/badge/payments-PayPal%20sandbox-003087)](https://developer.paypal.com/tools/sandbox/)
+[![Built on PayPal (sandbox)](https://img.shields.io/badge/payments-PayPal%20sandbox-003087)](https://developer.paypal.com/tools/sandbox/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 > Built for the PayPal AI Hackathon. RealPay is an independent project and
@@ -19,11 +19,34 @@ straight to the contractor.
 
 ![A project page: the money summary and the schedule, with two milestones funded and their labour on hold, authorized on the homeowner's PayPal](docs/screenshot.png)
 
+## For judges
+
+- **What it is.** Milestone payments for a job: the money for each stage
+  is put on hold with PayPal and only charged when proof of the work
+  passes.
+- **Who does what.** PayPal moves the money (Orders v2 authorize and
+  capture, Payouts, Disputes, webhooks). The AI inspects the proof and
+  returns a verdict with reasons. Plain, tested code decides: the AI never
+  calls PayPal.
+- **The rule for paying without a person.** Checklist met, confidence of
+  0.8 or more, no flag raised, no dispute open and at most €650 on hold.
+  Anything else waits for the homeowner.
+- **Try it in two minutes.** Follow [Try it locally](#try-it-locally)
+  below. Without an AI key the app still runs: every proof goes to the
+  homeowner for review.
+- **Where to look.** The release policy is
+  [`server/node/src/domain`](server/node/src/domain), the AI inspector
+  [`server/node/src/verification`](server/node/src/verification), the
+  PayPal calls [`server/node/src/paypal`](server/node/src/paypal) and
+  [`customApiEndpoints`](server/node/src/customApiEndpoints). The API is in
+  [`docs/openapi.yaml`](docs/openapi.yaml) and the threat model in
+  [SECURITY.md](SECURITY.md).
+
 ## Try it locally
 
 ```bash
-# in a clone of this repository
-cp .env.sample .env        # see "Run it yourself" for what to fill in
+git clone https://github.com/mktaisales-glitch/realpay.git && cd realpay
+cp .env.sample .env        # see "Run it locally" for what to fill in
 cd server/node && npm install && npm start
 ```
 
@@ -45,22 +68,26 @@ Open <http://localhost:8080>, pick **Home renovation**, then:
 
 ## Why
 
-A contractor took €3,000 upfront for a renovation, started demolition and
-never came back. Paying everything upfront protects the contractor. Paying
-everything at the end protects the client. Neither works.
+A homeowner paid a contractor €2,975 in cash, upfront, to fix a shower. A
+day later there was a pipe sticking out of the wall, a cracked shower tray
+and nobody answering the phone. Paying everything upfront protects the
+contractor. Paying everything at the end protects the client. Neither
+works.
 
 Banks solved this long ago for construction loans: the money is released
 in stages, each one after an inspector signs off the work. RealPay brings
-that discipline to a €3,000 home renovation, with an AI inspector and a PayPal
-authorization on the money.
+that discipline to a home renovation of a few thousand euros, with an AI
+inspector and a PayPal authorization on the money.
+
+RealPay is not PayPal Buyer Protection and does not replace it.
 
 ### Why this is not another escrow
 
-|                      | Classic escrow                       | RealPay                                                       |
-| -------------------- | ------------------------------------ | ------------------------------------------------------------- |
-| Where the money sits | With a third party that holds it     | On the homeowner's PayPal, authorized but not charged         |
-| What releases it     | Both sides agree, or a manual review | Proof checked against a written checklist, a person on doubt  |
-| Materials            | Usually locked with everything else  | Paid upfront to the supplier, so the work can start           |
+|                      | Classic escrow                       | RealPay                                                        |
+| -------------------- | ------------------------------------ | -------------------------------------------------------------- |
+| Where the money sits | With a third party that holds it     | On the homeowner's PayPal, authorized but not charged          |
+| What releases it     | Both sides agree, or a manual review | Proof checked against a written checklist, a person on doubt   |
+| Materials            | Usually locked with everything else  | Paid upfront to the supplier, so the work can start            |
 | If the work stops    | A dispute, and the money waits       | Cancel the milestone: the labour hold is voided, never charged |
 
 ## How the money moves
@@ -127,11 +154,14 @@ Proof goes through three layers, cheapest first.
    caps protect the shared quota: a daily cap for the whole server
    (`AI_DAILY_CAP`) and one per project (`AI_CALLS_PER_PROJECT_PER_DAY`,
    10 by default). If a cap is reached or every provider is down, the proof
-   goes to a person.
+   goes to a person. A public instance also caps new projects
+   (`PROJECTS_PER_DAY`) and test-card payments
+   (`DEMO_CARD_FUNDINGS_PER_DAY`) per day.
 3. **Release policy.** A pure, fully tested function decides: release
    only when the checklist is met, confidence is at least the template's
    minimum (0.8), no flag was raised, no dispute is open, and the amount is
-   under the auto-release cap. Everything else is `review` or `reject`.
+   within the auto-release cap (€650 in the renovation template).
+   Everything else is `review` or `reject`.
 
 The AI never moves money on its own above the cap. Every decision, with
 its reason, is written to an append-only, tamper-evident (hash-chained)
@@ -166,8 +196,8 @@ Adding a niche means adding a file. The engine does not change.
 | Supplier payout fails              | Retry with the same batch id, no double payment     |
 | PayPal does not answer a payout    | Marked unconfirmed; retrying resolves it, same id   |
 | Capture left pending by PayPal     | Nothing paid out until PayPal confirms the capture  |
-| Authorization about to expire      | Homeowner reauthorizes the part on hold             |
-| Authorization expired              | Nothing captured; cancel and fund again             |
+| Hold about to expire               | Homeowner renews the hold (PayPal wallet only)      |
+| Hold expired                       | Nothing captured; cancel and fund again             |
 | Project cancelled mid-way          | Unreleased holds are voided, never charged          |
 | One project floods the AI          | Per-project daily cap, then manual review           |
 | Dispute opened                     | Releases frozen, evidence pack submitted to PayPal  |
@@ -228,18 +258,24 @@ it is compared in constant time.
 
 ## Run it locally
 
-You need Node.js 20 or newer and a free
-[PayPal developer](https://developer.paypal.com) account.
+You need Node.js 20 or newer (24 is what `.nvmrc` and the Docker image
+use) and a free [PayPal developer](https://developer.paypal.com) account.
 
-1. In the developer dashboard, create a **sandbox** REST app and two
-   sandbox business accounts (supplier and contractor).
+1. In the developer dashboard, create a **sandbox** REST app and the
+   sandbox accounts that will receive the payouts (supplier and
+   contractor; one account can play both). The sandbox business account
+   behind the REST app pays them, so it needs Payouts enabled and a EUR
+   balance. The default sandbox accounts of a new developer account
+   already have both.
 2. Copy the settings file and fill it in:
 
    ```bash
    cp .env.sample .env
    ```
 
-   AI keys are optional. Without them every proof goes to manual review.
+   `SUPPLIER_EMAIL` and `CONTRACTOR_EMAIL` are required: use the emails
+   of those sandbox accounts. AI keys are optional. Without them every
+   proof goes to manual review.
    [Gemini](https://aistudio.google.com) and
    [OpenRouter](https://openrouter.ai) both have free tiers.
 
@@ -286,12 +322,12 @@ the payment" until `PAYMENT.CAPTURE.COMPLETED` arrives; `DENIED` stops it.
 Next to PayPal's own statuses (`SUCCESS`, `PENDING`, `UNCLAIMED`…), RealPay
 keeps four of its own, because a failed request is not a failed payout:
 
-| State            | Meaning                                         | Retry |
-| ---------------- | ----------------------------------------------- | ----- |
-| `FAILED`         | PayPal refused it (4xx): nothing was sent       | Yes   |
-| `UNKNOWN`        | Timeout or 5xx: it may exist, same batch id     | Yes   |
-| `AWAITING_FUNDS` | The capture is pending at PayPal                | No    |
-| `BLOCKED`        | PayPal denied the pending capture               | No    |
+| State            | Meaning                                     | Retry |
+| ---------------- | ------------------------------------------- | ----- |
+| `FAILED`         | PayPal refused it (4xx): nothing was sent   | Yes   |
+| `UNKNOWN`        | Timeout or 5xx: it may exist, same batch id | Yes   |
+| `AWAITING_FUNDS` | The capture is pending at PayPal            | No    |
+| `BLOCKED`        | PayPal denied the pending capture           | No    |
 
 Retries reuse the `sender_batch_id`, which PayPal deduplicates, so a retry
 never pays twice. A retention refund is refused while its payout is
