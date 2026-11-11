@@ -33,7 +33,7 @@ const configSchema = z.object({
         .filter(Boolean),
     ),
   GEMINI_API_KEY: optionalString,
-  GEMINI_MODEL: z.string().default("gemini-2.5-flash"),
+  GEMINI_MODEL: z.string().default("gemini-3.5-flash-lite"),
   OPENROUTER_API_KEY: optionalString,
   OPENROUTER_MODEL: z.string().default("nvidia/nemotron-3.5-super-vl:free"),
   AI_DAILY_CAP: z.coerce.number().int().nonnegative().default(150),

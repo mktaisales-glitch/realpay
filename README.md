@@ -31,6 +31,11 @@ straight to the contractor.
 - **The rule for paying without a person.** Checklist met, confidence of
   0.8 or more, no flag raised, no dispute open and at most €650 on hold.
   Anything else waits for the homeowner.
+- **Live demo.** <https://realpay-z35l.onrender.com> runs against the
+  PayPal sandbox, with a test card so you can fund a milestone without a
+  PayPal login. It is a free instance: the first request can take about a
+  minute while it wakes up, and its data resets when it restarts.
+- **Demo video.** <https://youtu.be/fqfaIqlkH18> (2:36, English subtitles).
 - **Try it in two minutes.** Follow [Try it locally](#try-it-locally)
   below. Without an AI key the app still runs: every proof goes to the
   homeowner for review.
