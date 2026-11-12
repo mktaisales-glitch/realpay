@@ -3344,3 +3344,124 @@ dialog.cheer {
   margin: 14px 0 0;
   padding: 20px 22px;
 }
+
+/* The uploaded proof, next to the AI verdict. */
+.proof-file {
+  display: grid;
+  gap: 6px;
+  justify-self: start;
+  max-width: 340px;
+  color: var(--pp-blue);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.proof-file img {
+  display: block;
+  width: 100%;
+  max-height: 230px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  object-fit: cover;
+}
+
+.proof-file:hover span {
+  text-decoration: underline;
+}
+
+/* Demo: one switch between the two sides, always in view. */
+.side-switch {
+  position: sticky;
+  top: 8px;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 0 0 16px;
+  padding: 8px 10px 8px 16px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+
+.side-switch-label {
+  color: var(--ink-2);
+  font: 700 11px/1 var(--font-ai);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.sides {
+  display: flex;
+  flex: 1;
+  gap: 4px;
+  min-width: 260px;
+  padding: 4px;
+  border-radius: 99px;
+  background: var(--surface-2);
+}
+
+.side {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 99px;
+  background: transparent;
+  color: var(--ink-2);
+  font: 14px/1 var(--font);
+  cursor: pointer;
+}
+
+.side span {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.side:hover {
+  background: #fff;
+}
+
+.side-on,
+.side-on:hover {
+  background: var(--pp-blue);
+  color: #fff;
+  cursor: default;
+}
+
+.side-switch-tab {
+  padding: 0 8px;
+  color: var(--pp-blue);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+@media (width <= 560px) {
+  .side-switch {
+    border-radius: var(--radius);
+    padding: 10px;
+  }
+
+  .side span {
+    display: none;
+  }
+}
+
+.extras-ask {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border-left: 4px solid var(--pp-blue);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-size: 14px;
+}

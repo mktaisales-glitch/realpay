@@ -279,6 +279,7 @@ export function buildProjectView(
         fileName: proof.fileName,
         mimeType: proof.mimeType,
         sizeBytes: proof.sizeBytes,
+        hasFile: Boolean(proof.storagePath),
         sha256: proof.sha256,
         note: proof.note,
         exif: proof.exif,

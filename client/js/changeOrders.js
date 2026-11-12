@@ -164,6 +164,12 @@ function changeOrderItem(changeOrder, view) {
 
 /** @param {any} view @param {boolean} open */
 function proposeForm(view, open) {
+  if (view.role !== "contractor")
+    return html`<p class="extras-ask">
+      <b>Need something that is not in the plan?</b> Ask
+      ${party(view, "contractor")}. They set the price and send it here, and
+      nothing is added or paid until you agree.
+    </p>`;
   const option = (role) =>
     html`<option value="${role}" ${role === view.role ? "selected" : ""}>
       ${partyWithRole(view, role)}
@@ -260,7 +266,11 @@ export function changeOrdersCard(view, open = false, formOpen = false) {
     </summary>
     <div class="fold-body">
       <p class="extras-lead">
-        Something not in the plan? Extras are paid only once both of you agree.
+        Something not in the plan?
+        ${view.role === "contractor" ? "You price the extra" : html`${party(view, "contractor")} prices the extra`}
+        and it is paid only once
+        ${view.role === "contractor" ? party(view, "owner") : "you"}
+        agree${view.role === "contractor" ? "s" : ""}.
       </p>
       ${
         changeOrders.length > 0

@@ -449,6 +449,27 @@ describe("end-to-end over HTTP", () => {
       status: "RELEASED",
     });
     expect(paypal.sendPayout).toHaveBeenCalledTimes(2);
+
+    // The client can open the file the professional uploaded.
+    const view = await request(app)
+      .get(`/api/projects/${project.projectId}`)
+      .set("Authorization", owner);
+    const stored = view.body.milestones.find(
+      (milestone: { id: string }) => milestone.id === milestoneId,
+    ).proofs[0];
+    expect(stored.hasFile).toBe(true);
+    const fileUrl = `${ms}/proofs/${stored.id}/file`;
+    const file = await request(app).get(fileUrl).set("Authorization", owner);
+    expect(file.status).toBe(200);
+    expect(file.headers["content-type"]).toBe("image/jpeg");
+    expect(file.headers["x-content-type-options"]).toBe("nosniff");
+    const withoutLink = await request(app).get(fileUrl);
+    expect(withoutLink.status).toBe(401);
+    const unknown = await request(app)
+      .get(`${ms}/proofs/prf_unknown/file`)
+      .set("Authorization", owner);
+    expect(unknown.status).toBe(404);
+    expect(unknown.body.error).toBe("PROOF_FILE_NOT_FOUND");
   });
 
   it("refuses to create a PayPal order without the owner link", async () => {
@@ -551,30 +572,47 @@ describe("change orders over HTTP", () => {
     ).toEqual(["change_order_accepted", "change_order_proposed"]);
   });
 
+  it("answers 403 when the owner proposes an extra, because the professional prices it", async () => {
+    const { app, project, owner } = setUp();
+
+    const response = await request(app)
+      .post(changeOrders(project))
+      .set("Authorization", owner)
+      .send({ description: "Paint the hallway too", priceCents: 30_000 });
+
+    expect(response.status).toBe(403);
+    expect(response.body.error).toBe("EXTRA_PRICED_BY_PROFESSIONAL");
+    const view = await request(app)
+      .get(`/api/projects/${project.projectId}`)
+      .set("Authorization", owner);
+    expect(view.status).toBe(200);
+    expect(view.body.changeOrders).toEqual([]);
+  });
+
   it("lets the owner decline an extra the contractor proposed", async () => {
     const { app, project, owner, contractor } = setUp();
     const proposed = await request(app)
       .post(changeOrders(project))
-      .set("Authorization", owner)
+      .set("Authorization", contractor)
       .send({ description: "Paint the hallway too", priceCents: 30_000 });
 
     const declined = await request(app)
       .post(
         `${changeOrders(project)}/${proposed.body.changeOrders[0].id}/decline`,
       )
-      .set("Authorization", contractor);
+      .set("Authorization", owner);
 
     expect(declined.status).toBe(200);
     expect(declined.body.changeOrders[0]).toMatchObject({
       status: "declined",
-      decidedBy: "contractor",
+      decidedBy: "owner",
       milestone: null,
     });
     expect(declined.body.milestones).toHaveLength(2);
   });
 
   it("validates the body: price in whole cents, within the milestone cap", async () => {
-    const { app, project, owner } = setUp();
+    const { app, project, contractor } = setUp();
 
     for (const body of [
       { description: "Extra socket", priceCents: 12.5 },
@@ -587,7 +625,7 @@ describe("change orders over HTTP", () => {
     ]) {
       const response = await request(app)
         .post(changeOrders(project))
-        .set("Authorization", owner)
+        .set("Authorization", contractor)
         .send(body);
       expect(response.status).toBe(400);
       expect(response.body.error).toBe("Bad Request");
@@ -627,7 +665,7 @@ describe("change orders over HTTP", () => {
     const { app, project, owner, contractor } = setUp();
     const proposed = await request(app)
       .post(changeOrders(project))
-      .set("Authorization", owner)
+      .set("Authorization", contractor)
       .send({ description: "Paint the hallway too", priceCents: 30_000 });
     const [changeOrder] = proposed.body.changeOrders;
     expect(changeOrder).toMatchObject({ canWithdraw: true, canDecide: false });
@@ -635,24 +673,26 @@ describe("change orders over HTTP", () => {
 
     const notYours = await request(app)
       .post(withdraw)
-      .set("Authorization", contractor);
+      .set("Authorization", owner);
     expect(notYours.status).toBe(403);
     expect(notYours.body.error).toBe("ONLY_PROPOSER_CAN_WITHDRAW");
 
     const withdrawn = await request(app)
       .post(withdraw)
-      .set("Authorization", owner);
+      .set("Authorization", contractor);
     expect(withdrawn.status).toBe(200);
     expect(withdrawn.body.changeOrders[0]).toMatchObject({
       status: "withdrawn",
-      decidedBy: "owner",
+      decidedBy: "contractor",
       canWithdraw: false,
     });
     expect(withdrawn.body.ledger.entries[0].action).toBe(
       "change_order_withdrawn",
     );
 
-    const again = await request(app).post(withdraw).set("Authorization", owner);
+    const again = await request(app)
+      .post(withdraw)
+      .set("Authorization", contractor);
     expect(again.status).toBe(409);
     expect(again.body.error).toBe("CHANGE_ORDER_ALREADY_DECIDED");
   });

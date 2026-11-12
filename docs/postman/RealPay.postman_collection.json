@@ -1279,7 +1279,7 @@
     },
     {
       "name": "7. Change orders (extras)",
-      "description": "Work outside the plan or an accepted change order cannot be paid. Either party proposes an extra; only the other party can accept or decline it, and only the proposer can withdraw it while it is unanswered. An accepted, priced extra becomes a new PLANNED milestone at the end of the plan, and is cancelled with it if that milestone is cancelled. A priced extra costs EUR 10 to EUR 2,000, and its description becomes the AI inspector's checklist, so text that reads as instructions is refused.",
+      "description": "Work outside the plan or an accepted change order cannot be paid. The professional proposes an extra with its price; only the client can accept or decline it, and only the proposer can withdraw it while it is unanswered. An accepted, priced extra becomes a new PLANNED milestone at the end of the plan, and is cancelled with it if that milestone is cancelled. A priced extra costs EUR 10 to EUR 2,000, and its description becomes the AI inspector's checklist, so text that reads as instructions is refused.",
       "item": [
         {
           "name": "Contractor proposes an extra the owner asked for",
@@ -1329,6 +1329,56 @@
             "body": {
               "mode": "raw",
               "raw": "{\n  \"description\": \"Move the shower tap 20 cm to the left\",\n  \"priceCents\": 25000,\n  \"requestedBy\": \"owner\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Owner tries to propose an extra (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 403', () => pm.response.to.have.status(403));",
+                  "pm.test('Error is EXTRA_PRICED_BY_PROFESSIONAL', () => pm.expect(pm.response.json().error).to.eql('EXTRA_PRICED_BY_PROFESSIONAL'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{ownerToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/change-orders",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects", "{{projectId}}", "change-orders"]
+            },
+            "description": "Owner token. The professional prices an extra; the client only accepts or declines it.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Paint the hallway too\",\n  \"priceCents\": 30000\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1467,7 +1517,7 @@
               "bearer": [
                 {
                   "key": "token",
-                  "value": "{{ownerToken}}",
+                  "value": "{{contractorToken}}",
                   "type": "string"
                 }
               ]
@@ -1517,7 +1567,7 @@
               "bearer": [
                 {
                   "key": "token",
-                  "value": "{{ownerToken}}",
+                  "value": "{{contractorToken}}",
                   "type": "string"
                 }
               ]
@@ -1533,7 +1583,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "projects", "{{projectId}}", "change-orders"]
             },
-            "description": "Owner token. A priced extra costs at least 1000 cents (EUR 10); 0 records a free change.",
+            "description": "Contractor token. A priced extra costs at least 1000 cents (EUR 10); 0 records a free change.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"description\": \"Swap the light switch plate\",\n  \"priceCents\": 500\n}",
@@ -1597,7 +1647,7 @@
           "response": []
         },
         {
-          "name": "Owner proposes an extra to withdraw",
+          "name": "Contractor proposes an extra to withdraw",
           "event": [
             {
               "listen": "test",
@@ -1606,11 +1656,61 @@
                 "exec": [
                   "pm.test('Status is 201', () => pm.response.to.have.status(201));",
                   "const co = pm.response.json().changeOrders.at(-1);",
-                  "pm.test('Proposed by the owner, who can withdraw it', () => {",
+                  "pm.test('Proposed by the contractor, who can withdraw it', () => {",
                   "    pm.expect(co.status).to.eql('proposed');",
                   "    pm.expect(co.canWithdraw).to.eql(true);",
                   "});",
                   "pm.collectionVariables.set('withdrawChangeOrderId', co.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{contractorToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/change-orders",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "projects", "{{projectId}}", "change-orders"]
+            },
+            "description": "Contractor token. Used by the next two requests.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Add a second socket by the window\",\n  \"priceCents\": 4000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Owner tries to withdraw the contractor's extra (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 403', () => pm.response.to.have.status(403));",
+                  "pm.test('Error is ONLY_PROPOSER_CAN_WITHDRAW', () => pm.expect(pm.response.json().error).to.eql('ONLY_PROPOSER_CAN_WITHDRAW'));"
                 ]
               }
             }
@@ -1634,33 +1734,36 @@
               }
             ],
             "url": {
-              "raw": "{{baseUrl}}/api/projects/{{projectId}}/change-orders",
+              "raw": "{{baseUrl}}/api/projects/{{projectId}}/change-orders/{{withdrawChangeOrderId}}/withdraw",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "projects", "{{projectId}}", "change-orders"]
+              "path": [
+                "api",
+                "projects",
+                "{{projectId}}",
+                "change-orders",
+                "{{withdrawChangeOrderId}}",
+                "withdraw"
+              ]
             },
-            "description": "Owner token. Used by the next two requests.",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"description\": \"Add a second socket by the window\",\n  \"priceCents\": 4000\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
+            "description": "Only the proposer can withdraw an extra; the other party declines it instead."
           },
           "response": []
         },
         {
-          "name": "Contractor tries to withdraw the owner's extra (403)",
+          "name": "Contractor withdraws the extra",
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "pm.test('Status is 403', () => pm.response.to.have.status(403));",
-                  "pm.test('Error is ONLY_PROPOSER_CAN_WITHDRAW', () => pm.expect(pm.response.json().error).to.eql('ONLY_PROPOSER_CAN_WITHDRAW'));"
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const co = pm.response.json().changeOrders.find((x) => x.id === pm.collectionVariables.get('withdrawChangeOrderId'));",
+                  "pm.test('Withdrawn, with no milestone and no further actions', () => {",
+                  "    pm.expect(co.status).to.eql('withdrawn');",
+                  "    pm.expect(co.milestone).to.eql(null);",
+                  "    pm.expect(co.canWithdraw).to.eql(false);",
+                  "});"
                 ]
               }
             }
@@ -1695,60 +1798,7 @@
                 "withdraw"
               ]
             },
-            "description": "Only the proposer can withdraw an extra; the other party declines it instead."
-          },
-          "response": []
-        },
-        {
-          "name": "Owner withdraws the extra",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
-                  "const co = pm.response.json().changeOrders.find((x) => x.id === pm.collectionVariables.get('withdrawChangeOrderId'));",
-                  "pm.test('Withdrawn, with no milestone and no further actions', () => {",
-                  "    pm.expect(co.status).to.eql('withdrawn');",
-                  "    pm.expect(co.milestone).to.eql(null);",
-                  "    pm.expect(co.canWithdraw).to.eql(false);",
-                  "});"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "auth": {
-              "type": "bearer",
-              "bearer": [
-                {
-                  "key": "token",
-                  "value": "{{ownerToken}}",
-                  "type": "string"
-                }
-              ]
-            },
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/projects/{{projectId}}/change-orders/{{withdrawChangeOrderId}}/withdraw",
-              "host": ["{{baseUrl}}"],
-              "path": [
-                "api",
-                "projects",
-                "{{projectId}}",
-                "change-orders",
-                "{{withdrawChangeOrderId}}",
-                "withdraw"
-              ]
-            },
-            "description": "Owner token. The extra stays on record as withdrawn (change_order_withdrawn in the ledger) and can no longer be paid."
+            "description": "Contractor token. The extra stays on record as withdrawn (change_order_withdrawn in the ledger) and can no longer be paid."
           },
           "response": []
         }

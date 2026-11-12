@@ -982,12 +982,28 @@ describe("change orders", () => {
 
   it("records who asked for the work as the proposer when nobody says otherwise", () => {
     expect(
-      t.service.proposeChangeOrder(projectId, "owner", tap).requestedBy,
-    ).toBe("owner");
+      t.service.proposeChangeOrder(projectId, "contractor", tap).requestedBy,
+    ).toBe("contractor");
+  });
+
+  it("refuses an extra proposed by the owner, because the professional prices it", () => {
+    for (const input of [tap, { ...tap, requestedBy: "owner" as const }]) {
+      expectThrowsDomainError(
+        () => t.service.proposeChangeOrder(projectId, "owner", input),
+        403,
+        "EXTRA_PRICED_BY_PROFESSIONAL",
+      );
+    }
+    expect(listChangeOrders(t.db, projectId)).toHaveLength(0);
+    expect(actions().filter((a) => a.startsWith("change_order_"))).toEqual([]);
   });
 
   it("does not let the proposer accept or decline their own extra", () => {
-    const changeOrder = t.service.proposeChangeOrder(projectId, "owner", tap);
+    const changeOrder = t.service.proposeChangeOrder(
+      projectId,
+      "contractor",
+      tap,
+    );
 
     for (const decision of ["accept", "decline"] as const) {
       expectThrowsDomainError(
@@ -995,7 +1011,7 @@ describe("change orders", () => {
           t.service.decideChangeOrder(
             projectId,
             changeOrder.id,
-            "owner",
+            "contractor",
             decision,
           ),
         403,
@@ -1049,13 +1065,12 @@ describe("change orders", () => {
   });
 
   it("funds an accepted extra like any other milestone, but a person always signs it off", async () => {
-    const changeOrder = t.service.proposeChangeOrder(projectId, "owner", tap);
-    t.service.decideChangeOrder(
+    const changeOrder = t.service.proposeChangeOrder(
       projectId,
-      changeOrder.id,
       "contractor",
-      "accept",
+      tap,
     );
+    t.service.decideChangeOrder(projectId, changeOrder.id, "owner", "accept");
     const extra = t.milestone(projectId, 3);
 
     await t.service.fundWithCard(projectId, extra.id, APPROVED_CARD);
@@ -1145,16 +1160,15 @@ describe("change orders", () => {
 
   it("starts every extra's window on the day it is agreed", () => {
     for (const description of ["Extra socket", "Extra shelf"]) {
-      const changeOrder = t.service.proposeChangeOrder(projectId, "owner", {
-        description,
-        priceCents: 5000,
-      });
-      t.service.decideChangeOrder(
+      const changeOrder = t.service.proposeChangeOrder(
         projectId,
-        changeOrder.id,
         "contractor",
-        "accept",
+        {
+          description,
+          priceCents: 5000,
+        },
       );
+      t.service.decideChangeOrder(projectId, changeOrder.id, "owner", "accept");
     }
 
     expect(t.milestone(projectId, 4)).toMatchObject({
@@ -1174,7 +1188,7 @@ describe("change orders", () => {
     ];
     for (const input of bad) {
       expectThrowsDomainError(
-        () => t.service.proposeChangeOrder(projectId, "owner", input),
+        () => t.service.proposeChangeOrder(projectId, "contractor", input),
         400,
         "INVALID_CHANGE_ORDER",
       );
@@ -1214,7 +1228,7 @@ describe("change orders", () => {
   it("needs at least EUR 10 for a priced extra, and allows a free one", () => {
     expectThrowsDomainError(
       () =>
-        t.service.proposeChangeOrder(projectId, "owner", {
+        t.service.proposeChangeOrder(projectId, "contractor", {
           description: "Extra socket",
           priceCents: MIN_CHANGE_ORDER_CENTS - 1,
         }),
@@ -1223,7 +1237,7 @@ describe("change orders", () => {
     );
     for (const priceCents of [0, MIN_CHANGE_ORDER_CENTS]) {
       expect(
-        t.service.proposeChangeOrder(projectId, "owner", {
+        t.service.proposeChangeOrder(projectId, "contractor", {
           description: "Extra socket",
           priceCents,
         }).status,
@@ -1233,24 +1247,19 @@ describe("change orders", () => {
 
   it("keeps agreed extras within half of the original contract", () => {
     // The test contract is EUR 400 + EUR 1,500, so extras stop at EUR 950.
-    const first = t.service.proposeChangeOrder(projectId, "owner", {
+    const first = t.service.proposeChangeOrder(projectId, "contractor", {
       description: "Extra socket",
       priceCents: 50_000,
     });
-    const second = t.service.proposeChangeOrder(projectId, "owner", {
+    const second = t.service.proposeChangeOrder(projectId, "contractor", {
       description: "Extra shelf",
       priceCents: 50_000,
     });
-    t.service.decideChangeOrder(projectId, first.id, "contractor", "accept");
+    t.service.decideChangeOrder(projectId, first.id, "owner", "accept");
 
     const error = (() => {
       try {
-        t.service.decideChangeOrder(
-          projectId,
-          second.id,
-          "contractor",
-          "accept",
-        );
+        t.service.decideChangeOrder(projectId, second.id, "owner", "accept");
       } catch (error_) {
         return error_;
       }
@@ -1262,7 +1271,7 @@ describe("change orders", () => {
     });
     expectThrowsDomainError(
       () =>
-        t.service.proposeChangeOrder(projectId, "owner", {
+        t.service.proposeChangeOrder(projectId, "contractor", {
           description: "Extra mirror",
           priceCents: 45_001,
         }),
@@ -1270,7 +1279,7 @@ describe("change orders", () => {
       "EXTRAS_OVER_LIMIT",
     );
     expect(
-      t.service.proposeChangeOrder(projectId, "owner", {
+      t.service.proposeChangeOrder(projectId, "contractor", {
         description: "Extra mirror",
         priceCents: 45_000,
       }).status,
@@ -1284,10 +1293,10 @@ describe("change orders", () => {
       index < MAX_OPEN_CHANGE_ORDERS_PER_PROJECT;
       index += 1
     ) {
-      t.service.proposeChangeOrder(projectId, "owner", tap);
+      t.service.proposeChangeOrder(projectId, "contractor", tap);
     }
     expectThrowsDomainError(
-      () => t.service.proposeChangeOrder(projectId, "owner", tap),
+      () => t.service.proposeChangeOrder(projectId, "contractor", tap),
       409,
       "TOO_MANY_OPEN_CHANGE_ORDERS",
     );
@@ -1297,18 +1306,22 @@ describe("change orders", () => {
       t.service.decideChangeOrder(
         projectId,
         changeOrder.id,
-        "contractor",
+        "owner",
         "decline",
       );
     }
     while (
       listChangeOrders(t.db, projectId).length < MAX_CHANGE_ORDERS_PER_PROJECT
     ) {
-      const changeOrder = t.service.proposeChangeOrder(projectId, "owner", tap);
-      t.service.withdrawChangeOrder(projectId, changeOrder.id, "owner");
+      const changeOrder = t.service.proposeChangeOrder(
+        projectId,
+        "contractor",
+        tap,
+      );
+      t.service.withdrawChangeOrder(projectId, changeOrder.id, "contractor");
     }
     expectThrowsDomainError(
-      () => t.service.proposeChangeOrder(projectId, "owner", tap),
+      () => t.service.proposeChangeOrder(projectId, "contractor", tap),
       409,
       "TOO_MANY_CHANGE_ORDERS",
     );
@@ -1378,7 +1391,7 @@ describe("change orders", () => {
       "DISPUTE_OPEN",
     );
     expectThrowsDomainError(
-      () => t.service.proposeChangeOrder(projectId, "owner", tap),
+      () => t.service.proposeChangeOrder(projectId, "contractor", tap),
       409,
       "DISPUTE_OPEN",
     );
@@ -1388,13 +1401,12 @@ describe("change orders", () => {
   });
 
   it("cancels the extra when its milestone is cancelled", async () => {
-    const changeOrder = t.service.proposeChangeOrder(projectId, "owner", tap);
-    t.service.decideChangeOrder(
+    const changeOrder = t.service.proposeChangeOrder(
       projectId,
-      changeOrder.id,
       "contractor",
-      "accept",
+      tap,
     );
+    t.service.decideChangeOrder(projectId, changeOrder.id, "owner", "accept");
     const extra = t.milestone(projectId, 3);
 
     await t.service.cancelMilestone(projectId, extra.id);
@@ -1420,7 +1432,7 @@ describe("change orders", () => {
     const other = t.createProject();
     const changeOrder = t.service.proposeChangeOrder(
       other.projectId,
-      "owner",
+      "contractor",
       tap,
     );
 
@@ -1429,7 +1441,7 @@ describe("change orders", () => {
         t.service.decideChangeOrder(
           projectId,
           changeOrder.id,
-          "contractor",
+          "owner",
           "accept",
         ),
       404,
@@ -1466,9 +1478,12 @@ describe("change orders", () => {
   });
 
   it("keeps the ledger a valid hash chain through proposals and decisions", () => {
-    const first = t.service.proposeChangeOrder(projectId, "owner", tap);
+    const first = t.service.proposeChangeOrder(projectId, "contractor", {
+      ...tap,
+      requestedBy: "owner",
+    });
     const second = t.service.proposeChangeOrder(projectId, "contractor", tap);
-    t.service.decideChangeOrder(projectId, first.id, "contractor", "accept");
+    t.service.decideChangeOrder(projectId, first.id, "owner", "accept");
     t.service.decideChangeOrder(projectId, second.id, "owner", "decline");
 
     expect(verifyLedger(t.db, projectId).valid).toBe(true);

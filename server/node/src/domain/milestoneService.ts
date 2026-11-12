@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { CardRequest } from "@paypal/paypal-server-sdk";
@@ -1085,6 +1085,14 @@ export function createMilestoneService(deps: ServiceDependencies) {
     input: ChangeOrderInput,
   ): ChangeOrder {
     const project = requireProject(projectId);
+    // Whoever does the work prices it. The client only agrees or declines.
+    if (role !== "contractor") {
+      throw new DomainError(
+        403,
+        "EXTRA_PRICED_BY_PROFESSIONAL",
+        "The professional prices an extra. Ask them to propose it, then agree or decline it here.",
+      );
+    }
     // An accepted extra's description becomes the checklist the AI reads.
     const description = cleanLine(input.description);
     if (
@@ -1963,6 +1971,30 @@ export function createMilestoneService(deps: ServiceDependencies) {
     });
   }
 
+  /**
+   * The file behind a proof, so the client can look at what the
+   * professional uploaded. A proof stopped by the free checks was never
+   * kept, and the demo's disk does not survive a restart.
+   */
+  function proofFile(projectId: string, milestoneId: string, proofId: string) {
+    const { milestone } = requireMilestone(projectId, milestoneId);
+    const proof = listProofs(db, milestone.id).find(
+      (candidate) => candidate.id === proofId,
+    );
+    if (!proof?.storagePath || !existsSync(proof.storagePath)) {
+      throw new DomainError(
+        404,
+        "PROOF_FILE_NOT_FOUND",
+        "This proof file is not stored on the server.",
+      );
+    }
+    return {
+      fileName: proof.fileName,
+      mimeType: proof.mimeType,
+      bytes: readFileSync(proof.storagePath),
+    };
+  }
+
   function evidencePack(projectId: string, milestoneId: string) {
     const { project, milestone } = requireMilestone(projectId, milestoneId);
     const proofs = listProofs(db, milestone.id);
@@ -2402,6 +2434,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
     retryPayout,
     openDemoDispute,
     evidencePack,
+    proofFile,
     submitDisputeEvidence,
     resolveDemoDispute,
     handleWebhook,

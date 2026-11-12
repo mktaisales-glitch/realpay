@@ -254,6 +254,25 @@ export function createProjectRouter({
     response.status(201).json(outcome);
   }
 
+  /**
+   * Both parties can open the file behind a proof. It is served with its
+   * sniffed type, never as HTML, and only to a holder of a project link.
+   */
+  function proofFileRouteHandler(request: Request, response: Response) {
+    const { projectId, milestoneId } = milestoneParams(request);
+    const proofId = z.string().min(1).max(64).parse(request.params.proofId);
+    const file = service.proofFile(projectId, milestoneId, proofId);
+    response
+      .status(200)
+      .set({
+        "Content-Type": file.mimeType,
+        "Content-Disposition": "inline",
+        "Cache-Control": "private, max-age=3600",
+        "X-Content-Type-Options": "nosniff",
+      })
+      .send(file.bytes);
+  }
+
   function evidencePackRouteHandler(request: Request, response: Response) {
     const { projectId, milestoneId } = milestoneParams(request);
     response.json(service.evidencePack(projectId, milestoneId));
@@ -269,8 +288,8 @@ export function createProjectRouter({
   }
 
   /**
-   * Either party records an extra that was not in the plan. Nothing
-   * outside the plan can be paid until the other party accepts it.
+   * The professional records an extra that was not in the plan, with its
+   * price. Nothing outside the plan can be paid until the client accepts it.
    */
   function proposeChangeOrderRouteHandler(
     request: Request,
@@ -430,6 +449,7 @@ export function createProjectRouter({
     upload.single("file"),
     submitProofRouteHandler,
   );
+  router.get(`${ms}/proofs/:proofId/file`, anyone, proofFileRouteHandler);
   router.get(`${ms}/evidence`, anyone, evidencePackRouteHandler);
 
   router.post(co, anyone, changeOrderLimiter, proposeChangeOrderRouteHandler);

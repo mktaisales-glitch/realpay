@@ -39,9 +39,11 @@ straight to the contractor.
   _I do the work_: type a name, pick a 2 or 3 milestone starting point,
   edit the prices and the "done when" lists, and get one link to send to
   the client. _I pay for the work_: paste that link, or open the sample
-  job. To play both sides alone, each page has a link that opens the
-  other side in a new tab.
-- **Demo video.** <https://youtu.be/fqfaIqlkH18> (2:36, English subtitles).
+  job. To play both sides alone, the bar at the top of every job
+  switches between the client and the professional in one click, or
+  opens the other side in a new tab. The client sees each uploaded
+  proof on its milestone, next to the AI's verdict.
+- **Demo video.** <https://youtu.be/aqYL8m2_IWs> (2:37, English subtitles).
 - **Try it in two minutes.** Follow [Try it locally](#try-it-locally)
   below. Without an AI key the app still runs: every proof goes to the
   homeowner for review.
@@ -232,10 +234,10 @@ money without a person: the client always signs off.
 Renovations change on the way. Work outside the plan cannot be paid until
 both parties agree on it, in writing, on the project page.
 
-- **Either party proposes** an extra with a description and a price: €0
-  records a free change, otherwise €10 to €2,000. Only the other party can
-  accept or decline it; the proposer can withdraw it while it is
-  unanswered.
+- **The professional proposes** an extra with a description and its price,
+  because whoever does the work prices it: €0 records a free change,
+  otherwise €10 to €2,000. Only the client can accept or decline it; the
+  professional can withdraw it while it is unanswered.
 - **An accepted, priced extra becomes a milestone** at the end of the
   plan, with nothing upfront and a 3-day window from the day it is
   agreed. It is funded and proven like the rest, but the homeowner always

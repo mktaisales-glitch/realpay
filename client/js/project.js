@@ -606,7 +606,81 @@ function confidenceLine(proof, proofType) {
   </div>`;
 }
 
-function proofBlock(proof, proofType) {
+/** Uploaded proof files, fetched once with the private link, as object URLs. */
+const proofFiles = new Map();
+
+function proofFile(proof, milestoneId) {
+  const url = proofFiles.get(proof.id);
+  if (!proof.hasFile || url === false) return "";
+  const image = proof.mimeType?.startsWith("image/");
+  const label = image
+    ? "Uploaded photo · open full size ↗"
+    : "Open the uploaded document ↗";
+  if (!url)
+    return html`<a
+      class="proof-file"
+      data-proof-file="${proof.id}"
+      data-milestone="${milestoneId}"
+      data-image="${image ? "1" : ""}"
+      data-name="${proof.fileName}"
+      target="_blank"
+      rel="noopener"
+      ><span>${image ? "Loading the uploaded photo…" : label}</span></a
+    >`;
+  return html`<a
+    class="proof-file"
+    href="${url}"
+    target="_blank"
+    rel="noopener"
+  >
+    ${image ? html`<img src="${url}" alt="Proof uploaded: ${proof.fileName}" />` : ""}
+    <span>${label}</span>
+  </a>`;
+}
+
+/** Fetches the files the page is waiting for and draws them in place. */
+function loadProofFiles() {
+  for (const link of app.querySelectorAll("a[data-proof-file]")) {
+    const { proofFile: id, milestone } = link.dataset;
+    if (proofFiles.has(id)) continue;
+    proofFiles.set(id, "");
+    fetch(
+      `/api/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestone)}/proofs/${encodeURIComponent(id)}/file`,
+      { headers: { Authorization: `Bearer ${token()}` } },
+    )
+      .then((response) => {
+        if (!response.ok) throw new Error(String(response.status));
+        return response.blob();
+      })
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        proofFiles.set(id, url);
+        for (const waiting of app.querySelectorAll(
+          `a[data-proof-file="${CSS.escape(id)}"]`,
+        )) {
+          waiting.href = url;
+          const text = waiting.querySelector("span");
+          if (waiting.dataset.image) {
+            const img = document.createElement("img");
+            img.src = url;
+            img.alt = `Proof uploaded: ${waiting.dataset.name}`;
+            waiting.prepend(img);
+            if (text) text.textContent = "Uploaded photo · open full size ↗";
+          }
+          delete waiting.dataset.proofFile;
+        }
+      })
+      .catch(() => {
+        proofFiles.set(id, false);
+        for (const waiting of app.querySelectorAll(
+          `a[data-proof-file="${CSS.escape(id)}"]`,
+        ))
+          waiting.remove();
+      });
+  }
+}
+
+function proofBlock(proof, proofType, milestoneId) {
   const verdict = proof.verdict;
   const flags = [
     ...(proof.flags?.hard ?? []).map(
@@ -626,7 +700,7 @@ function proofBlock(proof, proofType) {
         ${formatDateTime(proof.createdAt)}</span
       >
     </div>
-    ${confidenceLine(proof, proofType)}
+    ${proofFile(proof, milestoneId)} ${confidenceLine(proof, proofType)}
     ${proof.decisionReason ? html`<div>${proof.decisionReason}</div>` : ""}
     ${
       verdict?.reasons?.length
@@ -893,7 +967,7 @@ function milestoneCard(milestone, view) {
             </div>`
       }
       ${actions.has("fund") ? fundPanel(milestone, view) : ""}
-      ${latest ? proofBlock(latest, milestone.proofType) : ""}
+      ${latest ? proofBlock(latest, milestone.proofType, milestone.id) : ""}
       ${uploading ? uploadPanel(milestone) : ""}
       ${waitingForProof ? html`<p class="small muted" style="margin:0">Waiting for ${view.contractorName} to upload proof. Nothing is released until it passes.</p>` : ""}
       ${
@@ -905,7 +979,9 @@ function milestoneCard(milestone, view) {
             >
               <summary>Earlier proofs (${older.length})</summary>
               <div class="fold-stack">
-                ${older.map((proof) => proofBlock(proof, milestone.proofType))}
+                ${older.map((proof) =>
+                  proofBlock(proof, milestone.proofType, milestone.id),
+                )}
               </div>
             </details>`
           : ""
@@ -1115,21 +1191,38 @@ function howItWorks(view, fresh) {
   </details>`;
 }
 
-/** In the demo one person can play both sides: each side opens in its tab. */
+/** In the demo one person can play both sides: a switch that is always in view. */
 function otherSide(view) {
-  const owner = view.role === "owner";
-  if (!view.demoMode || !state.tokens[owner ? "contractor" : "owner"])
+  if (!view.demoMode || !state.tokens.owner || !state.tokens.contractor)
     return "";
-  const name = owner ? view.contractorName : view.ownerName;
-  return html`<p class="jury">
-    Trying it alone?
+  const side = (role, label, name) =>
+    html`<button
+      type="button"
+      class="side ${view.role === role ? "side-on" : ""}"
+      data-act="switch-side"
+      data-role="${role}"
+      aria-pressed="${view.role === role ? "true" : "false"}"
+    >
+      <b>${label}</b><span>${name}</span>
+    </button>`;
+  const other = view.role === "owner" ? "pro" : "client";
+  return html`<nav
+    class="side-switch"
+    aria-label="Demo: switch between the two sides"
+  >
+    <span class="side-switch-label">Demo · see both sides</span>
+    <div class="sides">
+      ${side("owner", "Client", view.ownerName)}
+      ${side("contractor", "Professional", view.contractorName)}
+    </div>
     <a
-      href="/p/${encodeURIComponent(projectId)}?as=${owner ? "pro" : "client"}"
+      class="side-switch-tab"
+      href="/p/${encodeURIComponent(projectId)}?as=${other}"
       target="_blank"
       rel="noopener"
-      >Open ${name}'s side in a new tab ↗</a
+      >Side by side ↗</a
     >
-  </p>`;
+  </nav>`;
 }
 
 function demoCard(view) {
@@ -1276,6 +1369,7 @@ function page(view) {
   </details>`;
   const answerNeeded = (view.changeOrders ?? []).some((item) => item.canDecide);
   return html`
+    ${otherSide(view)}
     <header class="p-head">
       <div class="p-title">
         <span class="role-tag role-${view.role}"
@@ -1290,7 +1384,7 @@ function page(view) {
       <div class="p-tools">${menu}</div>
     </header>
     ${balanceHero(view, { next: nextLink(step), details })}
-    ${fresh ? share : ""} ${otherSide(view)} ${howItWorks(view, fresh)}
+    ${fresh ? share : ""} ${howItWorks(view, fresh)}
     <h2 class="section-title">Milestones</h2>
     <p class="section-hint">
       Open a milestone to see its amount and what has to be done. They are paid
@@ -1319,6 +1413,7 @@ function page(view) {
 /* ---------- behaviour ---------- */
 
 function afterRender() {
+  loadProofFiles();
   wirePayPalButtons(app, {
     async createOrder(milestoneId) {
       const { id } = await api(
@@ -1425,6 +1520,24 @@ async function handleAction(button) {
     (item) => item.id === milestoneId,
   );
 
+  if (act === "switch-side") {
+    const role = button.dataset.role;
+    if (!role || role === state.view?.role || !state.tokens[role]) return;
+    tabRole = role;
+    history.replaceState(
+      null,
+      "",
+      `${location.pathname}?as=${role === "owner" ? "client" : "pro"}`,
+    );
+    const view = await fetchView();
+    state.view = null;
+    show(view);
+    toast(
+      `Now seeing what ${role === "owner" ? view.ownerName : view.contractorName} sees.`,
+      "ok",
+    );
+    return;
+  }
   if (act === "copy") {
     await navigator.clipboard?.writeText(button.dataset.value ?? "");
     toast("Link copied.", "ok");

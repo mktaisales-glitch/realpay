@@ -33,8 +33,9 @@ info:
     | `ownerToken` | `owner` | fund, approve, reject, cancel, reauthorize, manage retention, demo controls |
     | `contractorToken` | `contractor` | upload proofs |
 
-    Both roles can read the project, retry failed settlement steps, submit dispute
-    evidence and propose change orders (only the other party can accept or decline one). A missing token, a wrong token and an unknown project all return the same
+    Both roles can read the project, see the uploaded proof files, retry failed
+    settlement steps and submit dispute evidence. Only the contractor proposes a
+    change order, with its price; only the owner can accept or decline it. A missing token, a wrong token and an unknown project all return the same
     `401 UNAUTHORIZED`, so project ids cannot be probed. A valid token with the wrong role
     returns `403 FORBIDDEN`.
 
@@ -523,6 +524,53 @@ paths:
         default:
           $ref: "#/components/responses/PayPalError"
 
+  /api/projects/{projectId}/milestones/{milestoneId}/proofs/{proofId}/file:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - $ref: "#/components/parameters/milestoneId"
+      - $ref: "#/components/parameters/proofId"
+    get:
+      tags: [Proofs]
+      operationId: getProofFile
+      summary: Get the uploaded proof file
+      description: |
+        The photo or certificate the contractor uploaded, exactly as stored, so the
+        owner can look at it next to the AI verdict before signing off. It is served
+        with the proof's own content type, `Content-Disposition: inline` and
+        `X-Content-Type-Options: nosniff`. A proof has a file to fetch when the project
+        view reports `hasFile: true`.
+      x-roles: [owner, contractor]
+      responses:
+        "200":
+          description: The stored file.
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: |
+            `PROOF_FILE_NOT_FOUND`: no such proof on this milestone, or its file is no
+            longer stored. `MILESTONE_NOT_FOUND`: no such milestone on this project.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
   /api/projects/{projectId}/milestones/{milestoneId}/reject:
     parameters:
       - $ref: "#/components/parameters/projectId"
@@ -874,10 +922,12 @@ paths:
       operationId: proposeChangeOrder
       summary: Propose an extra (change order)
       description: |
-        Either party proposes work that was not in the plan, with its price (`0` for a
+        The contractor proposes work that was not in the plan, with its price (`0` for a
         free change that should still be on record, otherwise EUR 10 to EUR 2,000).
-        `requestedBy` records who asked for the work and defaults to the proposer. The
-        proposal is appended to the ledger (`change_order_proposed`).
+        Whoever does the work prices it: the owner only accepts or declines, so the
+        owner's token gets `403 EXTRA_PRICED_BY_PROFESSIONAL`. `requestedBy` records
+        who asked for the work and defaults to the proposer. The proposal is appended
+        to the ledger (`change_order_proposed`).
 
         The description is text written by one of the parties, and an accepted, priced
         extra uses it as the AI inspector's checklist. So it is flattened to one line,
@@ -885,7 +935,7 @@ paths:
         as instructions to the inspector is refused. At most 20 extras can wait for an
         answer at once, and a project records at most 50. Not allowed while a dispute is
         open on the project.
-      x-roles: [owner, contractor]
+      x-roles: [contractor]
       requestBody:
         required: true
         content:
@@ -916,6 +966,17 @@ paths:
                 errorDescription: A priced extra costs at least €10.00. Use €0.00 to record a free change.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: |
+            `EXTRA_PRICED_BY_PROFESSIONAL`: the owner's token was used. The
+            professional prices an extra; the client accepts or declines it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: EXTRA_PRICED_BY_PROFESSIONAL
+                errorDescription: The professional prices an extra. Ask them to propose it, then agree or decline it here.
         "409":
           description: |
             `TOO_MANY_OPEN_CHANGE_ORDERS`: 20 extras already wait for an answer.
@@ -1343,6 +1404,15 @@ components:
         minLength: 1
         maxLength: 64
       example: co_3b1f0e2a9c6d4e57
+    proofId:
+      name: proofId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 64
+      example: prf_5d2c9a7e41b84f10
 
   headers:
     RateLimit:
@@ -2240,6 +2310,9 @@ components:
             [image/jpeg, image/png, application/pdf, application/octet-stream]
         sizeBytes:
           type: integer
+        hasFile:
+          type: boolean
+          description: In the project view, whether the uploaded file can be fetched.
         sha256:
           type: string
         note:
