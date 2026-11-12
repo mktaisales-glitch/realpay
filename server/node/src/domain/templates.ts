@@ -10,13 +10,15 @@ import { z } from "zod";
 
 // Pay Later in Spain covers purchases up to EUR 2,000 (Pay in 3).
 export const MAX_MILESTONE_EUR = 2000;
+/** Stored on a project whose milestones were written by one of the parties. */
+export const CUSTOM_TEMPLATE_ID = "custom";
 
 const partSchema = z.object({
   label: z.string().min(1).max(60),
   eur: z.number().int().nonnegative(),
 });
 
-const milestoneTemplateSchema = z
+export const milestoneTemplateSchema = z
   .object({
     title: z.string().min(1).max(80),
     durationDays: z.number().int().positive().max(90),

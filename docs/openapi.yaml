@@ -146,8 +146,9 @@ paths:
       operationId: createProject
       summary: Create a project
       description: |
-        Creates a project from a template, plans its milestones sequentially from today and
-        returns the owner and contractor capability tokens. **The tokens are returned only
+        Creates a project from a template, or from the parties' own `milestones` (a custom job),
+        plans its milestones sequentially from today and returns the owner and contractor
+        capability tokens. **The tokens are returned only
         once**; store them. The response does not include milestone ids: read them with
         `GET /api/projects/{projectId}`.
 
@@ -178,7 +179,14 @@ paths:
               schema:
                 $ref: "#/components/schemas/CreatedProject"
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: |
+            - `Bad Request`: the body failed validation (see `errorDescription`).
+            - `INVALID_MILESTONE`: a custom milestone has an empty name, label or checklist line after cleaning.
+            - `MILESTONE_LOOKS_LIKE_INSTRUCTIONS`: a custom milestone reads like an instruction to the AI inspector.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "404":
           description: "`TEMPLATE_NOT_FOUND`: no template with that id."
           content:
@@ -765,6 +773,7 @@ paths:
           description: |
             - `INVALID_MILESTONE_STATE`: status is not `PLANNED`.
             - `MILESTONE_BUSY`: another request is processing this milestone.
+            - `FUND_EARLIER_MILESTONE_FIRST`: an earlier milestone is still unfunded (`details.seq`). Milestones are paid in order.
           content:
             application/json:
               schema:
@@ -1148,7 +1157,9 @@ paths:
         "404":
           $ref: "#/components/responses/MilestoneNotFound"
         "409":
-          description: "`INVALID_MILESTONE_STATE`: status is not `PLANNED`."
+          description: |
+            - `INVALID_MILESTONE_STATE`: status is not `PLANNED`.
+            - `FUND_EARLIER_MILESTONE_FIRST`: an earlier milestone is still unfunded (`details.seq`). Milestones are paid in order.
           content:
             application/json:
               schema:
@@ -1213,6 +1224,7 @@ paths:
             - `INVALID_MILESTONE_STATE`: status is not `PLANNED`.
             - `ORDER_MISMATCH`: that order does not belong to this milestone.
             - `MILESTONE_BUSY`: another request is processing this milestone.
+            - `FUND_EARLIER_MILESTONE_FIRST`: an earlier milestone is still unfunded (`details.seq`). Milestones are paid in order.
           content:
             application/json:
               schema:
@@ -1564,6 +1576,24 @@ components:
           maxLength: 60
           default: Contractor
           description: Trimmed.
+        createdBy:
+          type: string
+          enum: [owner, contractor]
+          default: owner
+          description: Which party set the job up. Recorded as the actor of `project_created` in the ledger.
+        milestones:
+          type: array
+          minItems: 1
+          maxItems: 12
+          description: >
+            The job's own milestones, written by the parties. When present the project is stored with
+            `templateId: custom`: the template named in `templateId` still supplies retention and governance,
+            but its milestones are replaced, the checklist is treated as untrusted text and no milestone is
+            ever released without the client's sign-off. Text is cleaned (control characters and `"""` removed);
+            `INVALID_MILESTONE` when a line is empty after cleaning, `MILESTONE_LOOKS_LIKE_INSTRUCTIONS` when a
+            line reads like an instruction to the AI inspector.
+          items:
+            $ref: "#/components/schemas/MilestoneTemplate"
 
     CreatedProject:
       type: object
@@ -2020,6 +2050,8 @@ components:
           checklist,
           proofType,
           status,
+          extra,
+          lockedBy,
           amount,
           upfront,
           held,
@@ -2050,6 +2082,22 @@ components:
           enum: [photo, document]
         status:
           $ref: "#/components/schemas/MilestoneStatus"
+        extra:
+          type: boolean
+          description: True when the milestone was added by an agreed change order.
+        lockedBy:
+          type: object
+          nullable: true
+          required: [seq, title]
+          description: >
+            Milestones are funded in order. When an earlier milestone is still unfunded, this names it and
+            the `fund` action is withheld; funding anyway answers 409 `FUND_EARLIER_MILESTONE_FIRST`.
+            Agreed extras are outside the sequence and a cancelled milestone blocks nothing.
+          properties:
+            seq:
+              type: integer
+            title:
+              type: string
         amount:
           $ref: "#/components/schemas/Money"
         upfront:

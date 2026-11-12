@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light dark" />
+    <meta name="color-scheme" content="light" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -15,7 +15,7 @@
     <title>RealPay · Pay for the work, not the promise</title>
     <meta
       name="description"
-      content="Milestone payments for renovations and rentals. PayPal authorizes the labour; AI checks the proof of work before anything is released."
+      content="Milestone payments for any job. PayPal holds the money for each milestone; an AI inspector checks the proof of work before anything is paid."
     />
     <script type="module" src="/js/home.js"></script>
   </head>
@@ -23,11 +23,11 @@
     <header class="topbar">
       <a class="logo" href="/" aria-label="RealPay home">
         <svg viewBox="0 0 32 32" aria-hidden="true">
-          <rect width="32" height="32" rx="8" fill="var(--brand)" />
+          <rect width="32" height="32" rx="8" fill="#003087" />
           <path
             d="M9 17.5l4.5 4.5L23 11"
             fill="none"
-            stroke="var(--accent)"
+            stroke="#ffffff"
             stroke-width="3.4"
             stroke-linecap="round"
             stroke-linejoin="round"
@@ -40,70 +40,25 @@
         <span>Built on PayPal · sandbox</span>
       </span>
     </header>
+
     <div class="container">
-      <main>
-        <section class="hero">
-          <h1>Pay for the work, <em>not the promise.</em></h1>
-          <p>
-            Milestone payments authorized through PayPal. Released when AI
-            checks the proof.
-          </p>
-          <a class="hero-link" href="#templates">See templates ↓</a>
+      <main id="flow">
+        <section class="tf">
+          <p class="tf-kicker">Milestone payments · built on PayPal</p>
+          <h1 class="tf-q">Pay for the work, not the promise.</h1>
+          <p class="tf-help">Loading…</p>
         </section>
-
-        <details class="card fold how" id="how" data-key="how" open>
-          <summary class="fold-head">
-            <h2>How it works</h2>
-            <span class="small muted">4 steps</span>
-            <span class="chev" aria-hidden="true"></span>
-          </summary>
-          <div class="fold-body">
-            <ol class="how-steps">
-              <li>
-                <strong>Agree the milestones.</strong> Each has a price and a
-                checklist of what the proof must show.
-              </li>
-              <li>
-                <strong>Fund with PayPal.</strong> Materials go to the supplier
-                now. The labour is only authorized on the homeowner's PayPal,
-                not charged yet.
-              </li>
-              <li>
-                <strong>AI checks the proof.</strong> Photo or certificate
-                against the checklist. Reused or edited files are flagged.
-              </li>
-              <li>
-                <strong>Money moves on proof.</strong> Small, clear stages
-                release on their own. The rest waits for your OK.
-              </li>
-            </ol>
-            <p class="how-why small muted">
-              Why: paying everything up front puts all the risk on the
-              homeowner, paying at the end puts it on the contractor. Banks
-              release construction loans in stages, against proof. RealPay
-              brings that to everyday jobs.
-            </p>
-          </div>
-        </details>
-
-        <h2 class="section-title" id="start">Start a project</h2>
-        <section class="templates" id="templates">
-          <div class="card empty">
-            <span class="spinner" aria-hidden="true"></span>Loading templates…
-          </div>
-        </section>
-
-        <div id="recent"></div>
       </main>
+
       <footer class="footer">
-        <span
-          >RealPay · built for the PayPal AI Hackathon 2026 · open source under
-          the MIT licence</span
-        >
-        <span
-          >Sandbox demo: no real money moves. RealPay is not affiliated with
-          PayPal.</span
-        >
+        <span>
+          RealPay · built for the PayPal AI Hackathon 2026 · open source under
+          the MIT licence
+        </span>
+        <span>
+          Sandbox demo: no real money moves. RealPay is not affiliated with
+          PayPal.
+        </span>
       </footer>
     </div>
   </body>

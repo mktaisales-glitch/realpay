@@ -16,6 +16,8 @@ export type PolicyInput = {
   disputeOpen: boolean;
   /** An extra agreed during the work: always signed off by a person. */
   extra?: boolean;
+  /** Milestones written by a party, not by a template: same rule. */
+  customScope?: boolean;
 };
 
 export type PolicyDecision =
@@ -94,6 +96,13 @@ export function decideRelease(input: PolicyInput): PolicyDecision {
       decision: "review",
       reason:
         "The proof passed, but an agreed extra is always signed off by the homeowner.",
+    };
+  }
+  if (input.customScope) {
+    return {
+      decision: "review",
+      reason:
+        "The proof passed, but a job with its own milestones is always signed off by the client.",
     };
   }
   if (input.heldCents > input.autoReleaseMaxCents) {

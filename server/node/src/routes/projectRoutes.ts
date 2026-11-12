@@ -19,7 +19,7 @@ import {
   buildProjectView,
   requireProjectRecord,
 } from "../domain/projectView.ts";
-import type { Template } from "../domain/templates.ts";
+import { milestoneTemplateSchema, type Template } from "../domain/templates.ts";
 import { requireRole } from "../middleware/capabilityAuth.ts";
 import { jsonRateLimit } from "../middleware/rateLimit.ts";
 import { MAX_PROOF_BYTES } from "../verification/prechecks.ts";
@@ -34,6 +34,9 @@ const createProjectSchema = z.object({
   title: z.string().trim().max(80).optional(),
   ownerName: z.string().trim().min(1).max(60).default("Homeowner"),
   contractorName: z.string().trim().min(1).max(60).default("Contractor"),
+  // The party setting the job up may write its own milestones.
+  milestones: z.array(milestoneTemplateSchema).min(1).max(12).optional(),
+  createdBy: z.enum(["owner", "contractor"]).default("owner"),
 });
 
 const milestoneParamsSchema = z.object({

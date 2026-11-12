@@ -46,8 +46,10 @@ export function stage(milestone) {
       return {
         key: "planned",
         step: 0,
-        label: "Not funded",
-        detail: `${milestone.amount.display} to fund`,
+        label: milestone.lockedBy ? "Locked" : "Not paid yet",
+        detail: milestone.lockedBy
+          ? `Opens after milestone ${milestone.lockedBy.seq}`
+          : `${milestone.amount.display} to put on hold`,
       };
     }
     case "FUNDED":
@@ -57,7 +59,7 @@ export function stage(milestone) {
           key: "warn",
           step: 1,
           label: "Hold expired",
-          detail: "Fund again to continue",
+          detail: "Pay again to continue",
         };
       if (disputed)
         return {
@@ -181,76 +183,68 @@ export function releasedNote(view, sums) {
  * @param {any} view
  * @param {{ next?: unknown, details?: unknown }} [slots]
  */
-export function balanceHero(view, { next = "", details = "" } = {}) {
+export function progress(view) {
   const sums = buckets(view.milestones);
-  const total = sums.released + sums.retention + sums.held + sums.notFunded;
-  const percent = (part) => (total ? (part / total) * 100 : 0);
-  const parts = [
-    { key: "released", label: "Released", value: sums.released },
-    {
-      key: "retention",
-      label: "Retention (final fixes)",
-      value: sums.retention,
-    },
-    { key: "held", label: "On hold", value: sums.held },
-    { key: "unfunded", label: "Not yet funded", value: sums.notFunded },
-  ];
-  const summary = parts
-    .map((part) => `${part.label} ${formatCents(part.value)}`)
-    .join(", ");
-  return html`<section class="card balance" aria-labelledby="balance-title">
-    <div class="balance-top">
-      <span id="balance-title" class="balance-label">On hold</span>
-      <span class="balance-hint"
-        >${
-          sums.held === 0 && sums.released === 0
-            ? "Nothing on hold yet. Fund milestone 1 to start."
-            : "Authorized on the homeowner's PayPal, not charged yet"
-        }</span
-      >
+  const paid = sums.released + sums.retention;
+  const total = paid + sums.held + sums.notFunded;
+  return {
+    total,
+    paid,
+    held: sums.held,
+    toGo: sums.notFunded,
+    percent: total ? Math.round((paid / total) * 100) : 0,
+  };
+}
+
+/** The bar over the total: blue is paid, orange is on hold, grey is to go. */
+export function moneyBar(view) {
+  const { total, paid, held, toGo } = progress(view);
+  const width = (part) => (total ? ((part / total) * 100).toFixed(2) : "0");
+  return html`<div
+    class="hero-bar"
+    role="img"
+    aria-label="${`Of ${formatCents(total)}: ${formatCents(paid)} paid, ${formatCents(held)} on hold, ${formatCents(toGo)} to go.`}"
+  >
+    <span class="hero-seg hero-paid" style="width:${width(paid)}%"></span>
+    <span class="hero-seg hero-hold" style="width:${width(held)}%"></span>
+  </div>`;
+}
+
+function heroHint(view, { total, paid, held, percent }) {
+  const owner = view.role === "owner";
+  if (total > 0 && percent >= 100) return "Everything is paid. Job complete.";
+  if (paid === 0 && held === 0)
+    return owner
+      ? "Nothing paid yet. Start with milestone 1: the money is reserved on your PayPal, not charged."
+      : "Nothing paid yet. Send your client the link: you will see the money here as soon as it is on hold.";
+  return owner
+    ? "Money on hold is reserved on your PayPal, not charged. It is only paid when the work is approved."
+    : "Money on hold is reserved on your client's PayPal. It is paid to you when the work is approved.";
+}
+
+export function balanceHero(view, { next = "", details = "" } = {}) {
+  const sums = progress(view);
+  const key = (cls, label, value) =>
+    html`<li>
+      <span class="key key-${cls}" aria-hidden="true"></span>${label}
+      <strong>${formatCents(value)}</strong>
+    </li>`;
+  return html`<section class="card hero" aria-labelledby="hero-title">
+    <div class="hero-top">
+      <div>
+        <span id="hero-title" class="hero-label">Total price</span>
+        <div class="hero-amount">${formatCents(sums.total)}</div>
+      </div>
+      <div class="hero-percent">
+        <strong>${sums.percent}%</strong><span>completed</span>
+      </div>
     </div>
-    <div class="balance-amount">${formatCents(sums.held)}</div>
-    <p class="balance-sub">
-      <span class="dot dot-released" aria-hidden="true"></span
-      >${formatCents(sums.released)} released
-      ${
-        sums.retention > 0
-          ? html`<span class="dot dot-retention" aria-hidden="true"></span
-              >${formatCents(sums.retention)} retention (final fixes)`
-          : ""
-      }
-      <span class="dot dot-unfunded" aria-hidden="true"></span
-      >${formatCents(sums.notFunded)} to fund
-      <span class="balance-of">of ${formatCents(total)}</span>
-    </p>
-    <div
-      class="money-bar"
-      role="img"
-      aria-label="${`Of ${formatCents(total)}: ${summary}.`}"
-    >
-      ${parts.map((part) =>
-        part.value > 0
-          ? html`<span
-              class="money-seg seg-${part.key}"
-              style="width:${percent(part.value).toFixed(2)}%"
-            ></span>`
-          : "",
-      )}
-    </div>
-    <ol class="chips" aria-label="Milestones">
-      ${view.milestones.map((milestone) => {
-        const { key, label } = stage(milestone);
-        return html`<li>
-          <a
-            class="chip chip-${key}"
-            href="#m-${milestone.id}"
-            title="${`${milestone.seq}. ${milestone.title}: ${label}`}"
-            aria-label="${`Milestone ${milestone.seq}, ${milestone.title}: ${label}`}"
-            >${ICONS[key]}<span>${milestone.seq}</span></a
-          >
-        </li>`;
-      })}
-    </ol>
+    ${moneyBar(view)}
+    <ul class="hero-legend">
+      ${key("paid", "Paid", sums.paid)} ${key("hold", "On hold", sums.held)}
+      ${key("togo", "To go", sums.toGo)}
+    </ul>
+    <p class="hero-hint">${heroHint(view, sums)}</p>
     ${next} ${details}
   </section>`;
 }

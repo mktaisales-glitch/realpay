@@ -62,7 +62,7 @@ export function render(element, markup) {
 }
 
 export const STATUS_LABELS = {
-  PLANNED: "Not funded",
+  PLANNED: "Not paid yet",
   FUNDED: "On hold",
   IN_REVIEW: "Checking proof",
   RELEASED: "Released",
@@ -72,7 +72,7 @@ export const STATUS_LABELS = {
 
 export const DECISION_LABELS = {
   release: "Approved by AI · funds released",
-  review: "Sent to the homeowner for review",
+  review: "Sent to the client for review",
   reject: "Proof rejected · nothing released",
 };
 
@@ -87,13 +87,13 @@ export const FLAG_LABELS = {
   no_capture_date: "No capture date",
   taken_away_from_site: "Taken away from the site",
   no_location: "No location data",
-  document_needs_human_check: "Documents are signed off by the homeowner",
+  document_needs_human_check: "Documents are signed off by the client",
 };
 
 export const PAYOUT_LABELS = {
   supplier: "Materials to supplier",
-  contractor: "Labour to contractor",
-  retention: "Retention to contractor",
+  contractor: "Payment to the professional",
+  retention: "Retention to the professional",
 };
 
 export const LEDGER_LABELS = {

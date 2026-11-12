@@ -21,6 +21,8 @@ import {
 } from "./changeOrders.js";
 import {
   balanceHero,
+  moneyBar,
+  progress,
   buckets,
   DONE,
   ICONS,
@@ -80,9 +82,14 @@ async function whileBusy(button, task) {
   }
 }
 
+/** The side this tab shows. A tab keeps its side even if another one, in the
+ * same browser, is showing the other side of the same job. */
+let tabRole = "";
+
 function token() {
   const role =
-    state.tokens.active ?? (state.tokens.owner ? "owner" : "contractor");
+    tabRole ||
+    (state.tokens.active ?? (state.tokens.owner ? "owner" : "contractor"));
   return state.tokens[role];
 }
 
@@ -109,7 +116,6 @@ const FOCUS_ATTRIBUTES = [
   "data-kind",
   "data-days",
   "data-scenario",
-  "data-role",
   "name",
 ];
 
@@ -150,10 +156,72 @@ function restoreFocus(selectors) {
 }
 
 /** @param {any} view */
+/** A full-screen "well done" when a milestone is completed and paid. */
+function celebrate(milestone, view) {
+  const { percent } = progress(view);
+  const next = view.milestones.find((item) => !DONE.has(item.status));
+  const colours = ["#0070e0", "#ef751f", "#003087", "#ffc439", "#3ccf8e"];
+  const confetti = Array.from(
+    { length: 28 },
+    (_, index) =>
+      html`<i
+        style="left:${(index * 37) % 100}%;background:${colours[index % colours.length]};animation-delay:${((index * 7) % 10) / 10}s"
+      ></i>`,
+  );
+  const dialog = document.createElement("dialog");
+  dialog.className = "cheer";
+  render(
+    dialog,
+    html`<div class="confetti" aria-hidden="true">${confetti}</div>
+      <p class="cheer-kicker">Milestone ${milestone.seq} complete</p>
+      <h2>
+        ${percent >= 100 ? "All done! 100% completed" : `Great! ${percent}% of the job is completed`}
+      </h2>
+      <p>
+        “${milestone.title}” is approved and the money on hold was released to
+        ${view.role === "owner" ? view.contractorName : "you"}.
+      </p>
+      ${moneyBar(view)}
+      ${next ? html`<p class="small muted">Next up: milestone ${next.seq}, ${next.title}.</p>` : ""}
+      <form method="dialog">
+        <button class="btn btn-primary">Continue</button>
+      </form>`,
+  );
+  dialog.addEventListener("close", () => dialog.remove());
+  document.body.append(dialog);
+  dialog.showModal();
+}
+
+/** What changed since the last view that deserves more than a re-render. */
+function announce(before, view) {
+  if (!before) return;
+  const paid = new Set(["RELEASED", "CLOSED"]);
+  for (const milestone of view.milestones) {
+    const was = before.milestones.find(
+      (item) => item.id === milestone.id,
+    )?.status;
+    if (!was || was === milestone.status) continue;
+    if (paid.has(milestone.status) && !paid.has(was)) {
+      celebrate(milestone, view);
+      return;
+    }
+    if (
+      view.role === "contractor" &&
+      was === "PLANNED" &&
+      milestone.status === "FUNDED"
+    )
+      toast(
+        `${milestone.held.display} is now on hold for milestone ${milestone.seq}. You can start.`,
+        "ok",
+      );
+  }
+}
+
 function show(view) {
   const json = JSON.stringify(view);
   if (json === state.lastJson) return;
   state.lastJson = json;
+  const before = state.view;
   state.view = view;
   const selectors =
     state.restore.length > 0
@@ -164,6 +232,7 @@ function show(view) {
   render(app, page(view));
   afterRender();
   restoreFocus(selectors.filter(Boolean));
+  announce(before, view);
 }
 
 /**
@@ -171,6 +240,15 @@ function show(view) {
  * @param {string} action path segment after /milestones/:id/
  * @param {unknown} [body]
  */
+/** What to say once PayPal has put a milestone's money on hold. */
+function heldMessage(milestoneId) {
+  const milestone = state.view?.milestones.find((m) => m.id === milestoneId);
+  const upfront = milestone && milestone.upfront.value !== "0.00";
+  return upfront
+    ? "The money is on hold on PayPal. Only the materials part is paid now, to the supplier."
+    : "The money is on hold on PayPal. Nothing is charged until the work is approved.";
+}
+
 async function milestoneAction(milestoneId, action, body) {
   const view = await api(
     `/api/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}/${action}`,
@@ -189,27 +267,6 @@ function reportError(error) {
 
 /* ---------- view: header, totals, schedule ---------- */
 
-function roleSwitch(view) {
-  if (!state.tokens.owner || !state.tokens.contractor) {
-    return html`<span class="pill pill-planned"
-      >Viewing as
-      ${view.role === "owner" ? view.ownerName : view.contractorName}</span
-    >`;
-  }
-  const button = (role, label) =>
-    html`<button
-      type="button"
-      data-role="${role}"
-      aria-pressed="${view.role === role ? "true" : "false"}"
-    >
-      ${label}
-    </button>`;
-  return html`<div class="role-switch" role="group" aria-label="View as">
-    ${button("owner", view.ownerName === "Homeowner" ? "Homeowner" : `Homeowner · ${view.ownerName}`)}
-    ${button("contractor", view.contractorName === "Contractor" ? "Contractor" : `Contractor · ${view.contractorName}`)}
-  </div>`;
-}
-
 function totals(view) {
   const { totals: t, governance: g } = view;
   const cell = (cls, label, value) =>
@@ -217,19 +274,26 @@ function totals(view) {
       <dt>${label}</dt>
       <dd>${value.display}</dd>
     </div>`;
+  const rule =
+    view.templateId === "custom"
+      ? html`<span
+          ><strong>${view.ownerName} approves every payment.</strong> The AI
+          inspector checks the proof, but on this job it never pays alone.</span
+        >`
+      : html`<span
+          ><strong>AI auto-releases</strong> up to ${g.autoReleaseMax.display}
+          when it is at least ${Math.round(g.minConfidence * 100)}% sure. Above
+          that, the client decides.</span
+        >`;
   return html`<dl class="totals">
-    ${cell("", "Project value", t.total)}
-    ${cell("", "Paid to suppliers", t.upfrontPaid)}
+    ${cell("", "Total price", t.total)}
+    ${cell("", "Paid at the start (materials)", t.upfrontPaid)}
     ${cell("held", "On hold", t.held)}
-    ${cell("released", "Released to contractor", t.released)}
+    ${cell("released", "Paid for approved work", t.released)}
     ${cell("", `Retention (final fixes, ${g.retentionPercent}%)`, t.retention)}
     ${cell("", "PayPal fees", t.fees)}
     <p class="governance">
-      <span
-        ><strong>AI auto-releases</strong> up to ${g.autoReleaseMax.display}
-        when it is at least ${Math.round(g.minConfidence * 100)}% sure. Above
-        that, you decide.</span
-      >
+      ${rule}
       <span
         ><strong>${g.retentionPercent}% retention</strong> is kept
         ${g.retentionDays} days after each release for final fixes.</span
@@ -319,7 +383,7 @@ function splitBlock(milestone) {
     upfrontState = html`<span class="state state-ok">✓ Paid to supplier</span>`;
 
   let heldState = html`<span class="state state-pending"
-    >Authorized on the homeowner's PayPal once funded</span
+    >Authorized on the client's PayPal once funded</span
   >`;
   if (held.released)
     heldState = html`<span class="state state-ok"
@@ -331,7 +395,7 @@ function splitBlock(milestone) {
     >`;
   else if (status === "FUNDED" || status === "IN_REVIEW")
     heldState = html`<span class="state state-held"
-      >● On hold · Authorized on the homeowner's PayPal, not charged yet</span
+      >● On hold · Authorized on the client's PayPal, not charged yet</span
     >`;
   else if (status === "CANCELLED")
     heldState = html`<span class="state state-pending"
@@ -408,14 +472,35 @@ function metaRow(milestone, view) {
 }
 
 function fundPanel(milestone, view) {
+  const testCard = (scenario, cls, label) =>
+    html`<button
+      type="button"
+      class="${cls}"
+      data-act="test-card"
+      data-scenario="${scenario}"
+      data-milestone="${milestone.id}"
+    >
+      ${label}
+    </button>`;
   return html`<div class="panel panel-pay">
-    <h4>Fund this milestone · ${milestone.amount.display}</h4>
+    <h4>Pay milestone ${milestone.seq} · ${milestone.amount.display}</h4>
     <p class="small muted" style="margin:0">
-      ${milestone.upfront.value === "0.00" ? "" : html`${milestone.upfront.display} goes to the materials supplier now. `}
-      ${milestone.held.display} is authorized on your PayPal and stays on hold,
-      not charged yet, until the work is proven. Cancel before then and you are
-      not charged for it.
+      ${milestone.upfront.value === "0.00" ? "" : html`${milestone.upfront.display} is paid now (${milestone.upfront.label}), so the work can start. `}
+      ${milestone.held.display} is reserved on your PayPal and stays on hold,
+      not charged, until the work is proven. Cancel before then and you are not
+      charged for it.
     </p>
+    ${
+      view.demoMode
+        ? html`<div class="pay-fast">
+              ${testCard("approve", "btn btn-primary", "Pay with sandbox test card")}
+              <span class="small muted"
+                >Demo shortcut: no PayPal login needed, no real money.</span
+              >
+            </div>
+            <div class="divider-or">or with a PayPal sandbox account</div>`
+        : ""
+    }
     <div class="paypal-buttons">
       <paypal-button
         type="pay"
@@ -432,34 +517,10 @@ function fundPanel(milestone, view) {
       ></paypal-message>
       <p class="small muted" data-paypal-fallback hidden>
         PayPal checkout could not load here.
-        ${view.demoMode ? "Use the sandbox card below." : "Reload the page to try again."}
+        ${view.demoMode ? "Use the sandbox test card above." : "Reload the page to try again."}
       </p>
     </div>
-    ${
-      view.demoMode
-        ? html`<div class="divider-or">or, in this sandbox demo</div>
-            <div class="btn-row">
-              <button
-                type="button"
-                class="btn btn-secondary"
-                data-act="test-card"
-                data-scenario="approve"
-                data-milestone="${milestone.id}"
-              >
-                Pay with test card
-              </button>
-              <button
-                type="button"
-                class="btn-link"
-                data-act="test-card"
-                data-scenario="decline"
-                data-milestone="${milestone.id}"
-              >
-                Try a declined card
-              </button>
-            </div>`
-        : ""
-    }
+    ${view.demoMode ? testCard("decline", "btn-link", "Try a declined card") : ""}
   </div>`;
 }
 
@@ -493,7 +554,7 @@ function uploadPanel(milestone) {
       <input type="file" name="file" accept="${accept}" required />
     </label>
     <label class="field-label">
-      Note for the homeowner (optional)
+      Note for your client (optional)
       <textarea name="note" maxlength="500"></textarea>
     </label>
     <div class="btn-row">
@@ -588,7 +649,7 @@ function proofBlock(proof, proofType) {
     <details>
       <summary>Integrity details</summary>
       <p class="small mono">SHA-256 ${proof.sha256}</p>
-      ${proof.note ? html`<p class="small">Contractor note: “${proof.note}”</p>` : ""}
+      ${proof.note ? html`<p class="small">Note from the professional: “${proof.note}”</p>` : ""}
       ${proof.exif ? html`<p class="small mono">${JSON.stringify(proof.exif)}</p>` : ""}
     </details>
   </div>`;
@@ -754,6 +815,41 @@ const ACTION_BUTTONS = {
       ),
 };
 
+function milestoneFacts(milestone) {
+  const fact = (label, value) =>
+    html`<div>
+      <dt>${label}</dt>
+      <dd>${value}</dd>
+    </div>`;
+  const split = milestone.upfront.value !== "0.00";
+  return html`<dl class="ms-facts">
+    ${fact("Amount", milestone.amount.display)}
+    ${split ? fact("Paid at the start", html`${milestone.upfront.display} · ${milestone.upfront.label}`) : ""}
+    ${split ? fact("On hold until approved", milestone.held.display) : ""}
+    ${fact("Proof", milestone.proofType === "document" ? "A document" : "A photo")}
+  </dl>`;
+}
+
+function milestoneNote(milestone, view) {
+  const owner = view.role === "owner";
+  const locked = milestone.lockedBy;
+  if (locked)
+    return html`<p class="ms-locked">
+      ${ICONS.planned}<span
+        >${owner ? "Pay" : `${view.ownerName} pays`} milestone ${locked.seq}
+        (${locked.title}) first. Milestones are paid in order.</span
+      >
+    </p>`;
+  if (!owner && milestone.status === "PLANNED")
+    return html`<p class="ms-locked">
+      ${ICONS.planned}<span
+        >Not paid yet. Wait until ${view.ownerName} puts
+        ${milestone.amount.display} on hold before you start.</span
+      >
+    </p>`;
+  return "";
+}
+
 function milestoneCard(milestone, view) {
   const actions = new Set(milestone.actions);
   const buttons = Object.entries(ACTION_BUTTONS)
@@ -769,7 +865,7 @@ function milestoneCard(milestone, view) {
   const key = `m-${milestone.id}`;
 
   return html`<details
-    class="card milestone ms-${where.key}"
+    class="card milestone ms-${where.key}${milestone.lockedBy ? " is-locked" : ""}"
     id="${key}"
     data-key="${key}"
     ${openAttr(key, milestone.id === state.focus)}
@@ -787,6 +883,15 @@ function milestoneCard(milestone, view) {
       <span class="chev" aria-hidden="true"></span>
     </summary>
     <div class="ms-body">
+      ${milestoneFacts(milestone)} ${milestoneNote(milestone, view)}
+      ${
+        uploading
+          ? ""
+          : html`<div class="ms-done">
+              <h4>Done when</h4>
+              ${checklist(milestone)}
+            </div>`
+      }
       ${actions.has("fund") ? fundPanel(milestone, view) : ""}
       ${latest ? proofBlock(latest, milestone.proofType) : ""}
       ${uploading ? uploadPanel(milestone) : ""}
@@ -830,12 +935,9 @@ function milestoneCard(milestone, view) {
         data-key="${key}-info"
         ${openAttr(`${key}-info`)}
       >
-        <summary>
-          Payment split, dates${uploading ? "" : " and checklist"}
-        </summary>
+        <summary>Payment split and dates</summary>
         <div class="fold-stack">
           ${splitBlock(milestone)} ${metaRow(milestone, view)}
-          ${uploading ? "" : checklist(milestone)}
         </div>
       </details>
     </div>
@@ -874,7 +976,7 @@ function nextStep(view) {
     ],
     [
       (m, a) => a.has("fund"),
-      (m) => `Fund milestone ${m.seq} · ${m.amount.display}`,
+      (m) => `Pay milestone ${m.seq} · ${m.amount.display}`,
     ],
     [
       (m, a) => a.has("releaseRetention"),
@@ -895,10 +997,14 @@ function nextStep(view) {
   }
   const current = view.milestones.find((m) => !DONE.has(m.status));
   if (!current)
-    return { label: "Done", text: "All milestones paid.", waiting: true };
+    return {
+      label: "Done",
+      text: "All milestones are paid. Job complete.",
+      waiting: true,
+    };
   const owner = view.role === "owner";
   const waiting = {
-    PLANNED: owner ? null : [view.ownerName, "Funding for milestone"],
+    PLANNED: owner ? null : [view.ownerName, "Payment for milestone"],
     FUNDED: owner ? [view.contractorName, "Proof for milestone"] : null,
     IN_REVIEW: owner
       ? null
@@ -930,29 +1036,100 @@ function nextLink(step) {
 /* ---------- view: share, demo, ledger ---------- */
 
 function shareCard(view) {
-  if (view.role !== "owner" || !state.tokens.contractor) return "";
-  const base = `${location.origin}/p/${encodeURIComponent(view.id)}#t=`;
-  const row = (label, value) =>
-    html`<div class="share-row">
-      <strong>${label}</strong>
-      <input type="text" readonly value="${value}" aria-label="${label} link" />
+  if (view.role !== "contractor" || !state.tokens.owner) return "";
+  const link = `${location.origin}/p/${encodeURIComponent(projectId)}#t=${state.tokens.owner}`;
+  return html`<section class="card link-card" aria-labelledby="link-title">
+    <h2 id="link-title">Your client's link</h2>
+    <p class="small muted">
+      Send it to ${view.ownerName}. It opens this job with the price and the
+      milestones, ready to pay. They need no RealPay account.
+    </p>
+    <div class="link-row">
+      <input
+        type="text"
+        readonly
+        value="${link}"
+        aria-label="Link for your client"
+      />
       <button
         type="button"
-        class="btn btn-secondary"
+        class="btn btn-primary"
         data-act="copy"
-        data-value="${value}"
+        data-value="${link}"
       >
-        Copy
+        Copy link
       </button>
-    </div>`;
-  return html`<div class="card share">
-    <div class="small muted">
-      Each link is a private key. Send the contractor link only to
-      ${view.contractorName === "Contractor" ? "the contractor" : view.contractorName}.
     </div>
-    ${row("Contractor", base + state.tokens.contractor)}
-    ${row("Homeowner", base + state.tokens.owner)}
-  </div>`;
+  </section>`;
+}
+
+/** Three plain steps, different for each side. Open until work starts. */
+function howItWorks(view, fresh) {
+  const custom = view.templateId === "custom";
+  const steps =
+    view.role === "owner"
+      ? [
+          [
+            "Put the money on hold",
+            "Pay a milestone with PayPal. The money is reserved, not charged.",
+          ],
+          [
+            `${view.contractorName} does the work`,
+            "And uploads a photo or a document as proof.",
+          ],
+          [
+            "The proof is checked, PayPal pays",
+            custom
+              ? "An AI inspector checks it first. Nothing is paid without your OK."
+              : "An AI inspector checks it. Small, clear milestones are released automatically; the rest wait for your OK.",
+          ],
+        ]
+      : [
+          [
+            "Send the link",
+            `${view.ownerName} opens it and sees the price and the milestones.`,
+          ],
+          [
+            "The money goes on hold",
+            "Your client pays each milestone with PayPal, in order. You see it reserved before you start.",
+          ],
+          [
+            "Upload proof, get paid",
+            "A photo or a document. Once it is approved, PayPal pays you.",
+          ],
+        ];
+  return html`<details class="how" data-key="how" ${openAttr("how", fresh)}>
+    <summary>How it works</summary>
+    <ol class="how-steps">
+      ${steps.map(
+        ([title, text], index) =>
+          html`<li>
+            <span class="how-n">${index + 1}</span>
+            <div>
+              <strong>${title}</strong>
+              <p>${text}</p>
+            </div>
+          </li>`,
+      )}
+    </ol>
+  </details>`;
+}
+
+/** In the demo one person can play both sides: each side opens in its tab. */
+function otherSide(view) {
+  const owner = view.role === "owner";
+  if (!view.demoMode || !state.tokens[owner ? "contractor" : "owner"])
+    return "";
+  const name = owner ? view.contractorName : view.ownerName;
+  return html`<p class="jury">
+    Trying it alone?
+    <a
+      href="/p/${encodeURIComponent(projectId)}?as=${owner ? "pro" : "client"}"
+      target="_blank"
+      rel="noopener"
+      >Open ${name}'s side in a new tab ↗</a
+    >
+  </p>`;
 }
 
 function demoCard(view) {
@@ -1071,28 +1248,29 @@ const DOTS = raw(
 );
 
 function page(view) {
-  const people = html`${view.ownerName} pays · ${view.contractorName} delivers ·
-  AI inspector checks the proof`;
+  const owner = view.role === "owner";
   const step = nextStep(view);
   state.focus = step.milestone?.id ?? "";
+  const fresh = view.milestones.every(
+    (milestone) => milestone.status === "PLANNED",
+  );
   const share = shareCard(view);
   const demo = demoCard(view);
-  const menu =
-    share || demo
-      ? html`<details class="menu" data-key="menu" ${openAttr("menu")}>
-          <summary aria-label="Share and demo">
-            ${DOTS}<span>Share &amp; demo</span>
-          </summary>
-          <div class="menu-panel">${share}${demo}</div>
-        </details>`
-      : "";
+  const menu = demo
+    ? html`<details class="menu" data-key="menu" ${openAttr("menu")}>
+        <summary aria-label="Sandbox tools">
+          ${DOTS}<span>Sandbox tools</span>
+        </summary>
+        <div class="menu-panel">${demo}</div>
+      </details>`
+    : "";
   const released = releasedNote(view, buckets(view.milestones));
   const details = html`<details
     class="fold-inline balance-more"
     data-key="totals"
     ${openAttr("totals")}
   >
-    <summary>Totals and release rules</summary>
+    <summary>Totals and payment rules</summary>
     ${released ? html`<p class="small balance-note">Released: ${released}</p>` : ""}
     ${totals(view)}
   </details>`;
@@ -1100,13 +1278,24 @@ function page(view) {
   return html`
     <header class="p-head">
       <div class="p-title">
-        <div class="small muted">${people}</div>
+        <span class="role-tag role-${view.role}"
+          >${owner ? "You pay" : "You do the work"}</span
+        >
         <h1>${view.title}</h1>
+        <div class="small muted">
+          ${view.ownerName} pays · ${view.contractorName} does the work · an AI
+          inspector checks the proof
+        </div>
       </div>
-      <div class="p-tools">${roleSwitch(view)} ${menu}</div>
+      <div class="p-tools">${menu}</div>
     </header>
     ${balanceHero(view, { next: nextLink(step), details })}
+    ${fresh ? share : ""} ${otherSide(view)} ${howItWorks(view, fresh)}
     <h2 class="section-title">Milestones</h2>
+    <p class="section-hint">
+      Open a milestone to see its amount and what has to be done. They are paid
+      in order.
+    </p>
     <div class="milestones">
       ${view.milestones.map((milestone) => milestoneCard(milestone, view))}
     </div>
@@ -1123,7 +1312,7 @@ function page(view) {
       <p class="small muted swipe-hint">Swipe sideways to see the dates</p>
       ${schedule(view)}
     </details>
-    ${ledgerCard(view)}
+    ${ledgerCard(view)} ${fresh ? "" : share}
   `;
 }
 
@@ -1152,10 +1341,7 @@ function afterRender() {
             token: token(),
           },
         );
-        toast(
-          "PayPal authorized the labour; nothing is charged yet. The supplier payment is on its way.",
-          "ok",
-        );
+        toast(heldMessage(milestoneId), "ok");
         show(await fetchView());
       } catch (error) {
         reportError(error);
@@ -1185,7 +1371,7 @@ const CONFIRMATIONS = {
       warning = "The AI rejected the latest proof. ";
     return {
       title: `Release ${m.held.display}?`,
-      message: `${warning}${m.held.display} goes to the contractor through PayPal, minus the retention kept for final fixes. This can't be undone.`,
+      message: `${warning}${m.held.display} goes to the professional through PayPal, minus the retention kept for final fixes. This can't be undone.`,
       confirmLabel: warning
         ? `Release ${m.held.display} anyway`
         : "Release funds",
@@ -1203,7 +1389,7 @@ const CONFIRMATIONS = {
   reject: () => ({
     title: "Ask for more proof",
     message:
-      "Nothing is charged: the money stays on hold. The contractor sees your reason and can upload new proof.",
+      "Nothing is charged: the money stays on hold. The professional sees your reason and can upload new proof.",
     confirmLabel: "Send back",
     reason: {
       label: "What is missing?",
@@ -1213,7 +1399,7 @@ const CONFIRMATIONS = {
   "refund-retention": (m) => ({
     title: `Keep ${m.retention.display} for a defect?`,
     message:
-      "The retention is refunded to you through PayPal instead of being paid to the contractor.",
+      "The retention is refunded to you through PayPal instead of being paid to the professional.",
     confirmLabel: "Refund retention",
     danger: true,
     reason: {
@@ -1227,7 +1413,7 @@ const BODILESS = {
   approve: "Funds released through PayPal.",
   cancel: "Milestone cancelled. You were not charged for the part on hold.",
   reauthorize: "Hold renewed for another period.",
-  "release-retention": "Retention paid to the contractor.",
+  "release-retention": "Retention paid to the professional.",
   "submit-evidence": "Evidence pack sent to PayPal.",
   "retry-upfront": "Supplier payment retried.",
 };
@@ -1294,10 +1480,7 @@ async function handleAction(button) {
         await milestoneAction(milestoneId, "demo/fund-with-test-card", {
           scenario: button.dataset.scenario,
         });
-        toast(
-          "PayPal authorized the labour; nothing is charged yet. The supplier payment is on its way.",
-          "ok",
-        );
+        toast(heldMessage(milestoneId), "ok");
       } catch (error) {
         if (decline && error instanceof ApiError) {
           toast(
@@ -1468,7 +1651,7 @@ async function handleUpload(form) {
     );
     const messages = {
       release: ["AI approved the proof. Funds released through PayPal.", "ok"],
-      review: ["Proof sent to the homeowner for a decision.", "info"],
+      review: ["Proof sent to your client for a decision.", "info"],
       reject: ["Proof rejected. The money stays on hold.", "error"],
     };
     const [message, kind] = messages[outcome.decision] ?? [
@@ -1518,16 +1701,6 @@ app.addEventListener("click", (event) => {
       goal.querySelector("summary")?.focus({ preventScroll: true });
       return;
     }
-  }
-  const roleButton = target.closest("[data-role]");
-  if (roleButton instanceof HTMLButtonElement) {
-    state.tokens.active = /** @type {"owner" | "contractor"} */ (
-      roleButton.dataset.role
-    );
-    persist();
-    state.lastJson = "";
-    fetchView().then(show, reportError);
-    return;
   }
   const button = target.closest("button[data-act]");
   if (button instanceof HTMLButtonElement) {
@@ -1595,18 +1768,23 @@ function canRefresh() {
 }
 
 async function boot() {
+  const side = new URLSearchParams(location.search).get("as");
+  if (side === "client") tabRole = "owner";
+  if (side === "pro") tabRole = "contractor";
   const fragment = new URLSearchParams(location.hash.slice(1)).get("t");
   if (fragment) {
-    history.replaceState(null, "", location.pathname);
+    history.replaceState(null, "", location.pathname + location.search);
     try {
       const view = await fetchView(fragment);
       state.tokens[view.role] = fragment;
-      state.tokens.active = view.role;
+      state.tokens.active ??= view.role;
+      tabRole = view.role;
       persist();
     } catch (error) {
       reportError(error);
     }
   }
+  if (tabRole && !state.tokens[tabRole]) tabRole = "";
 
   if (!token()) {
     render(
@@ -1614,8 +1792,8 @@ async function boot() {
       html`<div class="card empty">
         <h1 style="font-size:24px;margin-bottom:8px">Open your private link</h1>
         <p>
-          This project can only be opened with the link its homeowner shared
-          with you.
+          This job can only be opened with the private link you were sent. Ask
+          the professional to send it again, or paste it on the first screen.
         </p>
         <a class="btn btn-primary" href="/">Go to RealPay</a>
       </div>`,
@@ -1626,6 +1804,12 @@ async function boot() {
   preparePayPal();
   try {
     show(await fetchView());
+    tabRole = state.view.role;
+    history.replaceState(
+      null,
+      "",
+      `${location.pathname}?as=${tabRole === "owner" ? "client" : "pro"}`,
+    );
     persist();
   } catch (error) {
     const missing = error instanceof ApiError && error.status === 404;

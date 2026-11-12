@@ -13,6 +13,7 @@ import {
   type Project,
 } from "../db/repository.ts";
 import { DomainError } from "./domainError.ts";
+import { earlierUnfunded } from "./fundingSequence.ts";
 import { formatEuro, toPayPalValue } from "./money.ts";
 import {
   checkReauthorize,
@@ -68,6 +69,8 @@ function actionsFor(
     canReauthorize: boolean;
     retentionPayoutOut: boolean;
     holdExpired: boolean;
+    /** An earlier milestone is still unfunded: this one waits its turn. */
+    locked: boolean;
   },
 ): MilestoneAction[] {
   const actions: MilestoneAction[] = [];
@@ -83,7 +86,10 @@ function actionsFor(
   }
 
   if (role === "owner") {
-    if (status === "PLANNED") actions.push("fund", "cancel");
+    if (status === "PLANNED") {
+      if (!context.locked) actions.push("fund");
+      actions.push("cancel");
+    }
     if ((status === "FUNDED" || status === "IN_REVIEW") && !disputed)
       actions.push("approve");
     // A proof in review is rejected first, then the milestone can be cancelled.
@@ -140,6 +146,10 @@ export function buildProjectView(
   const milestones = listMilestones(db, project.id);
   const ledger = listLedger(db, project.id);
   const integrity = verifyLedger(db, project.id);
+  const changeOrders = listChangeOrders(db, project.id);
+  const extraIds = new Set(
+    changeOrders.flatMap((c) => (c.milestoneId ? [c.milestoneId] : [])),
+  );
 
   const totals = {
     totalCents: 0,
@@ -156,6 +166,10 @@ export function buildProjectView(
       !milestone.heldCaptureId &&
       isHoldExpired(milestone.authExpiresAt, options.now);
     const proofs = listProofs(db, milestone.id);
+    const blocker =
+      milestone.status === "PLANNED"
+        ? earlierUnfunded(milestone, milestones, extraIds)
+        : undefined;
     const total = milestone.upfrontCents + milestone.heldCents;
     // A cancelled milestone only counts for what was actually spent on it.
     const spentOnCancelled = milestone.upfrontCaptureId
@@ -209,6 +223,9 @@ export function buildProjectView(
       checklist: milestone.checklist,
       proofType: milestone.proofType,
       status: milestone.status,
+      extra: extraIds.has(milestone.id),
+      // Milestones are paid in order: this one waits for an earlier one.
+      lockedBy: blocker ? { seq: blocker.seq, title: blocker.title } : null,
       amount: amount(total),
       upfront: {
         label: milestone.upfrontLabel,
@@ -298,6 +315,7 @@ export function buildProjectView(
           (payout) => payout.kind === "retention" && payout.status !== "FAILED",
         ),
         holdExpired,
+        locked: Boolean(blocker),
       }),
     };
   });
@@ -326,7 +344,7 @@ export function buildProjectView(
       fees: amount(totals.feesCents),
     },
     milestones: milestoneViews,
-    changeOrders: listChangeOrders(db, project.id).map((changeOrder) => {
+    changeOrders: changeOrders.map((changeOrder) => {
       const milestone = milestones.find(
         (m) => m.id === changeOrder.milestoneId,
       );

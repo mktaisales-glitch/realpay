@@ -33,7 +33,7 @@ function party(view, role) {
 /** @param {any} view @param {"owner" | "contractor"} role */
 function partyWithRole(view, role) {
   const name = party(view, role);
-  const what = role === "owner" ? "homeowner" : "contractor";
+  const what = role === "owner" ? "client" : "professional";
   return name.toLowerCase() === what ? name : `${name} (${what})`;
 }
 

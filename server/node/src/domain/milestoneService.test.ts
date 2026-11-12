@@ -292,14 +292,15 @@ describe("funding a milestone", () => {
   });
 
   it("refuses to authorize an order that belongs to another milestone", async () => {
-    await t.service.createFundingOrder(projectId, ms1);
     const { orderId: otherOrder } = await t.service.createFundingOrder(
       projectId,
-      ms2,
+      ms1,
     );
+    await t.service.fundWithCard(projectId, ms1, APPROVED_CARD);
+    await t.service.createFundingOrder(projectId, ms2);
 
     await expectDomainError(
-      t.service.authorizeFundingOrder(projectId, ms1, otherOrder),
+      t.service.authorizeFundingOrder(projectId, ms2, otherOrder),
       409,
       "ORDER_MISMATCH",
     );
@@ -617,6 +618,7 @@ describe("cancelling a milestone", () => {
 // The fake authorization expires on 9 Dec, 29 days after FIXED_NOW.
 async function expireHeldMilestone() {
   setUp({ demoMode: true });
+  await t.service.fundWithCard(projectId, ms1, APPROVED_CARD);
   await t.service.fundWithCard(projectId, ms2, APPROVED_CARD);
   await t.service.submitProof(projectId, ms2, upload("tiles"));
   t.service.advanceClock(projectId, 30);
@@ -866,6 +868,7 @@ describe("PayPal webhooks", () => {
   });
 
   it("freezes a milestone when a dispute opens on its capture", async () => {
+    await t.service.fundWithCard(projectId, ms1, APPROVED_CARD);
     await t.service.fundWithCard(projectId, ms2, APPROVED_CARD);
     await t.service.submitProof(projectId, ms2, upload("tiling"));
     const captureId = t.milestone(projectId, 2).upfrontCaptureId;
@@ -1492,6 +1495,7 @@ function payPalClientError(statusCode: number, issue: string) {
 describe("state guards", () => {
   it("cannot cancel a milestone while its proof is in review", async () => {
     setUp();
+    await t.service.fundWithCard(projectId, ms1, APPROVED_CARD);
     await t.service.fundWithCard(projectId, ms2, APPROVED_CARD);
     const outcome = await t.service.submitProof(
       projectId,
@@ -1700,6 +1704,7 @@ describe("PayPal webhook delivery", () => {
   });
 
   it("keeps a resolved dispute resolved when a late CREATED arrives", async () => {
+    await t.service.fundWithCard(projectId, ms1, APPROVED_CARD);
     await t.service.fundWithCard(projectId, ms2, APPROVED_CARD);
     const captureId = t.milestone(projectId, 2).upfrontCaptureId;
     const disputed = {

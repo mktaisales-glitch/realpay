@@ -42,6 +42,12 @@ describe("decideRelease", () => {
     expect(result.reason).toMatch(/agreed extra/);
   });
 
+  it("never auto-releases a job with its own milestones", () => {
+    const result = decideRelease(input({ heldCents: 1000, customScope: true }));
+    expect(result.decision).toBe("review");
+    expect(result.reason).toMatch(/own milestones/);
+  });
+
   it("sends a pass below the minimum confidence to a person", () => {
     expect(decideRelease(input({ verdict: verdictOf(true, 0.79) }))).toEqual({
       decision: "review",

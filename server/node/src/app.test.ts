@@ -2,7 +2,12 @@ import request from "supertest";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { MAX_PROOF_BYTES } from "./verification/prechecks.ts";
-import { createTestApp, pdfProof, sitePhoto } from "./testUtils.ts";
+import {
+  createTestApp,
+  pdfProof,
+  sitePhoto,
+  testTemplate,
+} from "./testUtils.ts";
 
 /* HTTP contract of the RealPay API, driven in-process by supertest. */
 
@@ -24,6 +29,17 @@ function setUp({ demoMode = false } = {}) {
     secondMs: `/api/projects/${project.projectId}/milestones/${second.id}`,
     owner: `Bearer ${project.ownerToken}`,
     contractor: `Bearer ${project.contractorToken}`,
+  };
+}
+
+function customMilestone(title: string, eur: number) {
+  return {
+    title,
+    durationDays: 3,
+    proofType: "photo",
+    upfront: { label: "Materials", eur: 0 },
+    held: { label: "Work", eur },
+    checklist: [`${title} is finished`],
   };
 }
 
@@ -127,6 +143,73 @@ describe("validation and errors", () => {
       error: "Bad Request",
       errorDescription: expect.stringContaining("templateId"),
     });
+  });
+
+  it("creates a job with its own milestones, set up by the provider", async () => {
+    const { app } = setUp();
+
+    const created = await request(app)
+      .post("/api/projects")
+      .send({
+        templateId: testTemplate.id,
+        title: "Logo and brand kit",
+        ownerName: "Ana",
+        contractorName: "Studio Vela",
+        createdBy: "contractor",
+        milestones: [
+          customMilestone("Sketches", 200),
+          customMilestone("Final files", 300),
+        ],
+      });
+
+    expect(created.status).toBe(201);
+    const view = await request(app)
+      .get(`/api/projects/${created.body.projectId}`)
+      .set("Authorization", `Bearer ${created.body.ownerToken}`);
+    expect(view.body).toMatchObject({
+      title: "Logo and brand kit",
+      templateId: "custom",
+      role: "owner",
+    });
+    expect(
+      view.body.milestones.map((m: { title: string; lockedBy: unknown }) => [
+        m.title,
+        m.lockedBy,
+      ]),
+    ).toEqual([
+      ["Sketches", null],
+      ["Final files", { seq: 1, title: "Sketches" }],
+    ]);
+  });
+
+  it("rejects a custom milestone with no money on hold", async () => {
+    const { app } = setUp();
+
+    const response = await request(app)
+      .post("/api/projects")
+      .send({
+        templateId: testTemplate.id,
+        milestones: [customMilestone("Sketches", 0)],
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: "Bad Request",
+      errorDescription: expect.stringContaining("milestones"),
+    });
+  });
+
+  it("answers 409 when the second milestone is funded before the first", async () => {
+    const { app, secondMs, owner, paypal } = setUp({ demoMode: true });
+
+    const response = await request(app)
+      .post(`${secondMs}/demo/fund-with-test-card`)
+      .set("Authorization", owner)
+      .send({ scenario: "approve" });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe("FUND_EARLIER_MILESTONE_FIRST");
+    expect(paypal.fundWithCard).not.toHaveBeenCalled();
   });
 
   it("rejects a reason that is too short", async () => {

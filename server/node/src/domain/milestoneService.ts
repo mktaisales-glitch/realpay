@@ -84,7 +84,13 @@ import {
   shiftAfterRelease,
   toIsoDate,
 } from "./schedule.ts";
-import { MAX_MILESTONE_EUR, type Template } from "./templates.ts";
+import { earlierUnfunded } from "./fundingSequence.ts";
+import {
+  CUSTOM_TEMPLATE_ID,
+  MAX_MILESTONE_EUR,
+  type MilestoneTemplate,
+  type Template,
+} from "./templates.ts";
 
 /* ######################################################################
  * Milestone engine.
@@ -141,6 +147,13 @@ export type CreateProjectInput = {
   ownerName: string;
   contractorName: string;
   startDate?: string;
+  /**
+   * Milestones written by the party setting the job up. They replace the
+   * template's own, and the job is then stored as a custom one.
+   */
+  milestones?: MilestoneTemplate[];
+  /** Who set the job up. Defaults to the owner. */
+  createdBy?: Party;
 };
 
 export type CreatedProject = {
@@ -200,6 +213,54 @@ export function hashToken(token: string): string {
 
 function newToken(): string {
   return randomBytes(24).toString("base64url");
+}
+
+/**
+ * One line, no invisible format characters, no quote fences. Text written by a
+ * party can end up in the checklist the AI inspector reads.
+ */
+function cleanLine(text: string): string {
+  return text
+    .replaceAll(/\p{Cf}/gu, "")
+    .replaceAll(/[\p{Cc}\s]+/gu, " ")
+    .replaceAll('"""', "")
+    .trim();
+}
+
+/** Cleans the milestones a party wrote, and refuses text aimed at the AI. */
+function cleanCustomMilestones(
+  milestones: readonly MilestoneTemplate[],
+): MilestoneTemplate[] {
+  return milestones.map((m, index) => {
+    const cleaned: MilestoneTemplate = {
+      ...m,
+      title: cleanLine(m.title),
+      upfront: { ...m.upfront, label: cleanLine(m.upfront.label) },
+      held: { ...m.held, label: cleanLine(m.held.label) },
+      checklist: m.checklist.map((line) => cleanLine(line)),
+    };
+    const texts = [
+      cleaned.title,
+      cleaned.upfront.label,
+      cleaned.held.label,
+      ...cleaned.checklist,
+    ];
+    if (texts.some((text) => text.length === 0)) {
+      throw new DomainError(
+        400,
+        "INVALID_MILESTONE",
+        `Milestone ${index + 1} has an empty name, label or checklist line.`,
+      );
+    }
+    if (texts.some((text) => looksLikePromptInjection(text))) {
+      throw new DomainError(
+        400,
+        "MILESTONE_LOOKS_LIKE_INSTRUCTIONS",
+        `Milestone ${index + 1} reads like instructions to the AI inspector. Describe the work in plain words.`,
+      );
+    }
+    return cleaned;
+  });
 }
 
 function newId(prefix: string): string {
@@ -906,12 +967,19 @@ export function createMilestoneService(deps: ServiceDependencies) {
         `No template "${input.templateId}".`,
       );
     }
+    // A party's own milestones replace the template's; the template still
+    // sets the retention, the release limits and the site.
+    const milestones = input.milestones
+      ? cleanCustomMilestones(input.milestones)
+      : template.milestones;
+    const templateId = input.milestones ? CUSTOM_TEMPLATE_ID : template.id;
+    const createdBy = input.createdBy ?? "owner";
     const ownerToken = newToken();
     const contractorToken = newToken();
     const project: Project = {
       id: newId("prj"),
-      templateId: template.id,
-      title: input.title?.trim() || template.defaultTitle,
+      templateId,
+      title: cleanLine(input.title ?? "") || template.defaultTitle,
       ownerName: input.ownerName,
       contractorName: input.contractorName,
       ownerTokenHash: hashToken(ownerToken),
@@ -929,12 +997,12 @@ export function createMilestoneService(deps: ServiceDependencies) {
     const start = input.startDate ?? toIsoDate(now());
     const windows = planSequential(
       start,
-      template.milestones.map((m) => m.durationDays),
+      milestones.map((m) => m.durationDays),
     );
 
     db.transaction(() => {
       insertProject(db, project);
-      for (const [index, m] of template.milestones.entries()) {
+      for (const [index, m] of milestones.entries()) {
         const window = windows[index] as { start: string; end: string };
         insertMilestone(db, {
           id: newId("ms"),
@@ -968,15 +1036,12 @@ export function createMilestoneService(deps: ServiceDependencies) {
           releasedAt: null,
         });
       }
-      ledger(project, null, "owner", "project_created", {
-        amountCents: template.milestones.reduce(
+      ledger(project, null, createdBy, "project_created", {
+        amountCents: milestones.reduce(
           (sum, m) => sum + (m.upfront.eur + m.held.eur) * 100,
           0,
         ),
-        detail: {
-          templateId: template.id,
-          milestones: template.milestones.length,
-        },
+        detail: { templateId, milestones: milestones.length },
       });
     })();
 
@@ -1020,13 +1085,8 @@ export function createMilestoneService(deps: ServiceDependencies) {
     input: ChangeOrderInput,
   ): ChangeOrder {
     const project = requireProject(projectId);
-    // One line, no invisible format characters, no quote fences: an accepted
-    // extra's description becomes the checklist the AI inspector reads.
-    const description = input.description
-      .replaceAll(/\p{Cf}/gu, "")
-      .replaceAll(/[\p{Cc}\s]+/gu, " ")
-      .replaceAll('"""', "")
-      .trim();
+    // An accepted extra's description becomes the checklist the AI reads.
+    const description = cleanLine(input.description);
     if (
       description.length < 3 ||
       description.length > MAX_CHANGE_ORDER_DESCRIPTION_LENGTH
@@ -1302,9 +1362,32 @@ export function createMilestoneService(deps: ServiceDependencies) {
 
   /* ---------- funding ---------- */
 
+  /** Milestones are paid in order; agreed extras are outside the sequence. */
+  function requireEarlierFunded(project: Project, milestone: Milestone) {
+    const extraIds = new Set(
+      listChangeOrders(db, project.id).flatMap((c) =>
+        c.milestoneId ? [c.milestoneId] : [],
+      ),
+    );
+    const blocker = earlierUnfunded(
+      milestone,
+      listMilestones(db, project.id),
+      extraIds,
+    );
+    if (blocker) {
+      throw new DomainError(
+        409,
+        "FUND_EARLIER_MILESTONE_FIRST",
+        `Fund milestone ${blocker.seq} (${blocker.title}) first.`,
+        { seq: blocker.seq },
+      );
+    }
+  }
+
   async function createFundingOrder(projectId: string, milestoneId: string) {
     const { project, milestone } = requireMilestone(projectId, milestoneId);
     requireStatus(milestone, ["PLANNED"], "fund");
+    requireEarlierFunded(project, milestone);
     const attempt = fundingAttempt(milestone);
     const { orderId } = await paypal.createMilestoneOrder({
       referenceId: milestone.id,
@@ -1330,6 +1413,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
     const { project, milestone } = requireMilestone(projectId, milestoneId);
     return withLock(milestone.id, async () => {
       requireStatus(milestone, ["PLANNED"], "fund");
+      requireEarlierFunded(project, milestone);
       if (milestone.orderId !== orderId) {
         throw new DomainError(
           409,
@@ -1353,6 +1437,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
     const { project, milestone } = requireMilestone(projectId, milestoneId);
     return withLock(milestone.id, async () => {
       requireStatus(milestone, ["PLANNED"], "fund");
+      requireEarlierFunded(project, milestone);
       const cardFundingsPerDay =
         deps.demoCardFundingsPerDay ?? DEFAULT_DEMO_CARD_FUNDINGS_PER_DAY;
       if (countCardFundingsSince(db, startOfUtcDay()) >= cardFundingsPerDay) {
@@ -1513,8 +1598,10 @@ export function createMilestoneService(deps: ServiceDependencies) {
     return withLock(milestone.id, async () => {
       requireStatus(milestone, ["FUNDED", "IN_REVIEW"], "submit proof for");
       requireLiveHold(project, milestone);
-      // An agreed extra's checklist was written by a party, not by us.
+      // An agreed extra's checklist was written by a party, not by us, and so
+      // is every milestone of a custom job.
       const isExtra = Boolean(getChangeOrderByMilestone(db, milestone.id));
+      const customScope = project.templateId === CUSTOM_TEMPLATE_ID;
       if (countProofs(db, milestone.id) >= MAX_PROOFS_PER_MILESTONE) {
         throw new DomainError(
           409,
@@ -1577,7 +1664,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
           checklist: milestone.checklist,
           proofType: milestone.proofType,
           note: upload.note,
-          checklistFromChangeOrder: isExtra,
+          checklistFromChangeOrder: isExtra || customScope,
           file: {
             mimeType: checks.mimeType,
             bytes: upload.bytes,
@@ -1611,6 +1698,7 @@ export function createMilestoneService(deps: ServiceDependencies) {
           current.disputeId && current.disputeStatus !== "RESOLVED",
         ),
         extra: isExtra,
+        customScope,
       });
 
       insertProof(db, {
