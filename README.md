@@ -43,7 +43,7 @@ straight to the contractor.
   switches between the client and the professional in one click, or
   opens the other side in a new tab. The client sees each uploaded
   proof on its milestone, next to the AI's verdict.
-- **Demo video.** <https://youtu.be/aqYL8m2_IWs> (2:37, English subtitles).
+- **Demo video.** <https://youtu.be/ctppdndmihE> (2:37, English subtitles).
 - **Try it in two minutes.** Follow [Try it locally](#try-it-locally)
   below. Without an AI key the app still runs: every proof goes to the
   homeowner for review.
